@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Gotchas &middot; cratesplainer</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a href="./">Welcome (Listen)</a>
+  <a href="./commands.html">The Commands (Pay Attention)</a>
+  <a class="active" href="./gotchas.html">Gotchas (Trust Me)</a>
+</nav>
+
+<h1>Gotchas</h1>
+<p class="sub">Things I'm going to tell you because I assume you wouldn't figure them out on your own.</p>
+
+<h2>1. The daemon isn't magic</h2>
+
+<p>The daemon &mdash; "crated", with a "d" at the end, which in Unix tradition means "daemon," which is, I should mention, a Greek word originally &mdash; has to actually be running for any of this to work.</p>
+
+<div class="aside">
+if you close the terminal you ran <code>crated</code> in, it stops. That's not a bug. That's how processes work. You may be thinking, "I'd like it to keep running." We'll get there. There's a thing called launchd. Don't worry about it yet.
+</div>
+
+<h2>2. The site name is not the directory name</h2>
+
+<p>I've seen people &mdash; not <em>you</em>, but <em>people</em> &mdash; type:</p>
+
+<pre>crate push ./mysite</pre>
+
+<p>And then wonder why it doesn't work. The command needs the directory <em>and</em> the name. Two arguments. Like a sandwich: bread, filling, more bread. Except there's no second bread. So just bread and filling.</p>
+
+<div class="aside let">
+the reason these are separate is so you can push the same directory under different names. Or different directories under the same name (which replaces the old one). It's about flexibility. I value flexibility. We all should.
+</div>
+
+<h2>3. Names have rules</h2>
+
+<p>Your site name must match this regex:</p>
+
+<pre>^[a-z0-9][a-z0-9._-]{0,62}$</pre>
+
+<div class="aside fyi">
+regex stands for "regular expression," which is &mdash; you know what, I'll save that one. Just know: lowercase letters and digits to start, then letters/digits/dot/hyphen/underscore, max 63 chars. No spaces. No capital letters. No emojis. <em>Especially</em> no emojis. I see what you're trying to do.
+</div>
+
+<h2>4. Symlinks are silently dropped</h2>
+
+<p>If your directory contains symbolic links &mdash; "symlinks," in the parlance of our times &mdash; the daemon will not include them in the deployed site. It just... skips them. Quietly. Like a polite waiter clearing a half-eaten dish.</p>
+
+<div class="aside well">
+this is for security reasons. A symlink could point anywhere &mdash; <code>/etc/passwd</code>, your SSH key, the secret folder where you keep your unfinished novel. We don't want any of that getting served as static HTML. So: dropped.
+</div>
+
+<h2>5. It's only on localhost</h2>
+
+<p>The daemon binds to <code>127.0.0.1:7777</code>, which means: only you, on this computer, can reach it. Nobody on your network. Nobody on the internet. Just you. That's by design. Don't try to "fix" it by making it bind to <code>0.0.0.0</code>, because:</p>
+
+<ol>
+  <li>There's no HTTPS yet.</li>
+  <li>The token is in plaintext in <code>config.yaml</code>.</li>
+  <li>You have not earned the right to bind to <code>0.0.0.0</code>.</li>
+</ol>
+
+<div class="aside">
+if you genuinely need remote access, the answer is Caddy in front of the daemon. Or Tailscale. There's a roadmap. <a href="/overview/roadmap.html">It's right here</a>. I've thought about this more than you have.
+</div>
+
+<h2>6. The token is in your config file</h2>
+
+<p>On first run, the daemon generates a random bearer token and stores it in <code>config.yaml</code>. If you delete that file, you'll get a new token, which means any other client (like, I don't know, a script you wrote) using the old token will stop working. So don't do that.</p>
+
+<div class="aside so">
+the file has mode 0600, which means only you can read it. Which is correct. Which is good. Which I made sure of, because I think about these things.
+</div>
+
+<h2>You're ready</h2>
+
+<p>I think you're ready. I really do. You've learned a lot. I'm proud of you. Go push a site. Open it in your browser. Feel that warm glow of accomplishment.</p>
+
+<p>And remember: I'll be right here, if you need me. I'll <em>always</em> be right here.</p>
+
+<footer><a href="./">&larr; back to the beginning</a> (in case you forgot anything)</footer>
+</html>

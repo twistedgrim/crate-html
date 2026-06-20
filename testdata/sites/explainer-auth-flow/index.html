@@ -1,0 +1,18 @@
+<!doctype html><meta charset=utf-8><title>Auth flow explainer</title>
+<style>
+body{font-family:system-ui;max-width:46em;margin:2em auto;padding:0 1em;line-height:1.55}
+.flow{display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin:1.5em 0;padding:1em;background:#f6f6f8;border-radius:8px}
+.box{padding:.75em 1em;background:#fff;border:1px solid #d0d0d8;border-radius:6px;font-family:ui-monospace,monospace;font-size:.9em}
+.arrow{color:#888;font-size:1.2em}
+.box.client{background:#e0f2ff}.box.server{background:#fff4d6}.box.token{background:#e6ffe6}
+</style>
+<h1>Auth flow</h1>
+<p>How a request gets from the CLI to the daemon without leaking the bearer token to other processes.</p>
+<div class="flow">
+<div class="box client">crate CLI</div><span class="arrow">&rarr;</span>
+<div class="box token">reads ~/.config/crate/<br>config.yaml (0600)</div><span class="arrow">&rarr;</span>
+<div class="box client">Authorization: Bearer ...</div><span class="arrow">&rarr;</span>
+<div class="box server">crated</div>
+</div>
+<h2>Why a token at all when it's localhost?</h2>
+<p>So that moving to a remote host later (Pi agent, tailnet exposure) is a config change, not a code change. Cheap now, no migration later.</p>

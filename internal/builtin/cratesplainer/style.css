@@ -1,0 +1,103 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fffaf2;
+  --fg: #1f1a14;
+  --muted: #6b5c44;
+  --accent: #b8631a;
+  --line: #ead9c0;
+  --code-bg: #f1e4ce;
+  --quote-bg: #fff2dc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1611;
+    --fg: #f1e6d3;
+    --muted: #b09a78;
+    --accent: #e09545;
+    --line: #3a2f23;
+    --code-bg: #25201a;
+    --quote-bg: #2a2218;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  background: var(--bg);
+  color: var(--fg);
+  max-width: 42rem;
+  margin: 2.5rem auto;
+  padding: 0 1.25rem 4rem;
+  line-height: 1.65;
+}
+h1 { font-size: 2.1rem; letter-spacing: -0.02em; margin-bottom: 0.2rem; }
+h1 + .sub { color: var(--muted); font-style: italic; margin-top: 0; }
+h2 { font-size: 1.35rem; margin-top: 2.2rem; padding-top: 1rem; border-top: 1px dashed var(--line); }
+h3 { font-size: 1.05rem; font-style: italic; color: var(--accent); }
+
+a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+nav.top {
+  display: flex; gap: 1rem; flex-wrap: wrap;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.92rem; padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--line); margin-bottom: 1.5rem;
+}
+nav.top a { color: var(--muted); text-decoration: none; }
+nav.top a.active { color: var(--fg); font-weight: 700; }
+nav.top a:hover { color: var(--accent); }
+
+code, pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+code:not(pre code) {
+  background: var(--code-bg);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+pre {
+  background: var(--code-bg);
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+.aside {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.9em;
+  background: var(--quote-bg);
+  border-left: 4px solid var(--accent);
+  padding: 0.7em 1em;
+  margin: 1.2rem 0;
+  border-radius: 0 6px 6px 0;
+}
+.aside::before {
+  content: "Actually, ";
+  font-weight: 700;
+  color: var(--accent);
+  font-style: normal;
+}
+.aside.well::before { content: "Well, you see, "; }
+.aside.fyi::before { content: "FYI, "; }
+.aside.let::before { content: "Let me break this down for you. "; }
+.aside.so::before { content: "So basically, "; }
+
+.tip {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.9em;
+  background: var(--quote-bg);
+  padding: 0.7em 1em;
+  margin: 1rem 0;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+}
+.tip strong { color: var(--accent); }
+footer {
+  margin-top: 3rem; padding-top: 1rem;
+  border-top: 1px dashed var(--line);
+  color: var(--muted); font-size: 0.9em; font-style: italic;
+}
+.mustache {
+  font-size: 1.4em;
+  letter-spacing: 0.05em;
+}

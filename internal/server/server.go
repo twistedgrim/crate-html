@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io/fs"
 	"log"
 	"net/http"
 	"path"
 	"strings"
 
+	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/storage"
 	"github.com/Twistedgrim/crate-html/internal/wire"
@@ -24,17 +26,18 @@ const Version = "0.1.0-dev"
 
 // Server bundles the HTTP handlers.
 type Server struct {
-	store *storage.Store
-	cfg   config.Config
-	log   *log.Logger
+	store    *storage.Store
+	cfg      config.Config
+	log      *log.Logger
+	builtins []builtin.Site
 }
 
-// New returns a Server.
-func New(cfg config.Config, store *storage.Store, logger *log.Logger) *Server {
+// New returns a Server. Pass nil for builtins to skip embedded sites.
+func New(cfg config.Config, store *storage.Store, builtins []builtin.Site, logger *log.Logger) *Server {
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Server{store: store, cfg: cfg, log: logger}
+	return &Server{store: store, cfg: cfg, log: logger, builtins: builtins}
 }
 
 // Handler returns the root http.Handler for the daemon.
@@ -133,7 +136,9 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePublic serves /<site>/... and an index at /.
+// handlePublic serves /<site>/... and an index at /. Disk sites win; if no
+// disk site exists for the requested name, falls through to the matching
+// builtin (if any).
 func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 	// /api/* is owned by the auth handlers; if we got here it didn't match — 404.
 	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
@@ -155,33 +160,60 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Disk first.
+	exists, err := s.store.Exists(name)
+	if err == nil && exists {
+		s.serveDisk(w, r, name, parts)
+		return
+	}
+
+	// Then builtin.
+	if site, ok := s.findBuiltin(name); ok {
+		s.serveBuiltin(w, r, site, parts)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
+func (s *Server) serveDisk(w http.ResponseWriter, r *http.Request, name string, parts []string) {
 	siteDir, err := s.store.Path(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	exists, err := s.store.Exists(name)
-	if err != nil || !exists {
-		http.NotFound(w, r)
-		return
-	}
-
-	// If the URL is /<name> (no trailing slash), redirect so relative links work.
 	if len(parts) == 1 {
 		http.Redirect(w, r, "/"+name+"/", http.StatusFound)
 		return
 	}
-
 	rest := parts[1]
 	if rest == "" || strings.HasSuffix(rest, "/") {
 		rest = path.Join(rest, "index.html")
 	}
-	// path.Clean prevents directory traversal: any ../ resolves before the join,
-	// and an absolute "/" gets reduced. The site root is then joined with the
-	// cleaned relative path.
 	cleaned := path.Clean("/" + rest)
-	full := siteDir + cleaned
-	http.ServeFile(w, r, full)
+	http.ServeFile(w, r, siteDir+cleaned)
+}
+
+func (s *Server) serveBuiltin(w http.ResponseWriter, r *http.Request, site builtin.Site, parts []string) {
+	if len(parts) == 1 {
+		http.Redirect(w, r, "/"+site.Name+"/", http.StatusFound)
+		return
+	}
+	rest := parts[1]
+	if rest == "" || strings.HasSuffix(rest, "/") {
+		rest = path.Join(rest, "index.html")
+	}
+	cleaned := strings.TrimPrefix(path.Clean("/"+rest), "/")
+	http.ServeFileFS(w, r, site.FS, cleaned)
+}
+
+func (s *Server) findBuiltin(name string) (builtin.Site, bool) {
+	for _, b := range s.builtins {
+		if b.Name == name {
+			return b, true
+		}
+	}
+	return builtin.Site{}, false
 }
 
 func (s *Server) renderIndex(w http.ResponseWriter, _ *http.Request) {
@@ -190,20 +222,58 @@ func (s *Server) renderIndex(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Track which builtins are shadowed by a disk site of the same name.
+	diskNames := make(map[string]bool, len(sites))
+	for _, s := range sites {
+		diskNames[s.Name] = true
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, "<!doctype html><meta charset=utf-8><title>crate</title>")
-	fmt.Fprintln(w, "<style>body{font-family:system-ui,sans-serif;max-width:40em;margin:2em auto;padding:0 1em}</style>")
+	fmt.Fprintln(w, "<style>body{font-family:system-ui,sans-serif;max-width:40em;margin:2em auto;padding:0 1em;line-height:1.55}.tag{display:inline-block;font-size:.72em;padding:.15em .55em;border-radius:999px;background:rgba(80,180,120,.2);color:#2f9e63;margin-left:.5em;vertical-align:middle;font-weight:600;letter-spacing:.03em}</style>")
 	fmt.Fprintln(w, "<h1>crate</h1>")
-	if len(sites) == 0 {
+
+	hasAny := len(sites) > 0
+	for _, b := range s.builtins {
+		if !diskNames[b.Name] {
+			hasAny = true
+			break
+		}
+	}
+	if !hasAny {
 		fmt.Fprintln(w, "<p>No sites deployed yet. Try <code>crate push ./dir name</code>.</p>")
 		return
 	}
+
 	fmt.Fprintln(w, "<ul>")
 	for _, site := range sites {
 		fmt.Fprintf(w, "<li><a href=\"/%s/\">%s</a> &middot; %d files &middot; %d bytes</li>\n",
 			html.EscapeString(site.Name), html.EscapeString(site.Name), site.FileCount, site.SizeBytes)
 	}
+	for _, b := range s.builtins {
+		if diskNames[b.Name] {
+			continue // shadowed by a disk site with the same name
+		}
+		files, size := countEmbedded(b.FS)
+		fmt.Fprintf(w, "<li><a href=\"/%s/\">%s</a> <span class=\"tag\">built-in</span> &middot; %d files &middot; %d bytes</li>\n",
+			html.EscapeString(b.Name), html.EscapeString(b.Name), files, size)
+	}
 	fmt.Fprintln(w, "</ul>")
+}
+
+func countEmbedded(fsys fs.FS) (files int, size int64) {
+	_ = fs.WalkDir(fsys, ".", func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr == nil {
+			size += info.Size()
+			files++
+		}
+		return nil
+	})
+	return files, size
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

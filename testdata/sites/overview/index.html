@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>crate-html overview</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a class="active" href="./">Overview</a>
+  <a href="./flow.html">Request flow</a>
+  <a href="./api.html">HTTP API</a>
+  <a href="./storage.html">Storage</a>
+  <a href="./roadmap.html">Roadmap</a>
+</nav>
+
+<h1>crate-html <span class="pill">v0.1.0-dev</span></h1>
+
+<p><strong>crate-html is local HTML hosting for AI coding agents.</strong> An agent (Claude Code, Pi, anything that can shell out) takes a directory of static HTML and runs <code>crate push ./dir name</code>. It comes back with <code>http://localhost:7777/name/</code>. The human opens that URL and sees the rendered artifact — a plan, an explainer, a code review — instead of skimming raw markdown in a chat window.</p>
+
+<p>That's the whole pitch. The rest of this document explains how it's built.</p>
+
+<h2>Two binaries, one module</h2>
+
+<div class="diagram">
+  <div class="node cli">crate</div>
+  <div class="arrow">&mdash;HTTP&rarr;</div>
+  <div class="node svr">crated</div>
+  <div class="arrow">&mdash;writes&rarr;</div>
+  <div class="node fs">$XDG_DATA_HOME<br>/crate/sites/</div>
+</div>
+
+<p><code>crate</code> is the CLI agents invoke. <code>crated</code> is a small HTTP daemon that owns site storage. They live in one Go module (<code>github.com/Twistedgrim/crate-html</code>) and share an <code>internal/wire</code> package that defines the API contract once for both sides.</p>
+
+<table>
+<tr><th>Binary</th><th>Responsibility</th><th>Talks to</th></tr>
+<tr><td><code>crate</code></td><td>CLI: push, ls, rm, open, status</td><td><code>crated</code> over HTTP</td></tr>
+<tr><td><code>crated</code></td><td>HTTP server: API + static serve</td><td>filesystem</td></tr>
+</table>
+
+<div class="callout">
+<strong>Why two binaries instead of one?</strong>
+Agents call <code>crate push</code>; humans open URLs in a browser. Those are separate processes with different lifetimes. The daemon outlives any single agent invocation, so splitting them maps onto reality. The cost is one extra binary to ship and one extra concept ("is the daemon running?") to keep in your head.
+</div>
+
+<h2>What happens on <code>crate push ./site foo</code></h2>
+
+<ol>
+  <li>CLI reads <code>config.yaml</code> for base URL + bearer token.</li>
+  <li>CLI walks <code>./site</code> and starts streaming a tar archive into an <code>io.Pipe</code>.</li>
+  <li>The other end of the pipe is the body of a <code>PUT /api/sites/foo</code> request.</li>
+  <li>Daemon extracts the tar into a staging directory next to the site dir.</li>
+  <li>Daemon atomically renames the existing site aside, renames staging into place, deletes the old copy.</li>
+  <li>Daemon responds with <code>{ site, url }</code>. CLI prints the URL.</li>
+</ol>
+
+<p>See <a href="./flow.html">request flow</a> for the diagram.</p>
+
+<h2>What's in this repo</h2>
+
+<pre>cmd/crate/                CLI (kong) — push, ls, rm, open, status
+cmd/crated/               daemon
+internal/wire/            HTTP request/response types — the contract
+internal/config/          XDG-backed config loader (token, port)
+internal/storage/         filesystem ops + tar in/out + atomic swap
+internal/server/          net/http handlers
+internal/cliclient/       HTTP client used by `crate`
+.claude/skills/crate-push/  Claude Code skill wrapping `crate push`</pre>
+
+<h2>What's deliberately not in v0</h2>
+<ul>
+  <li>No Docker. No Caddy. No Tailscale. Those are clean layers to add later — see <a href="./roadmap.html">roadmap</a>.</li>
+  <li>No database. Sites are plain directories on disk.</li>
+  <li>No vhost routing. Path-based (<code>/&lt;site&gt;/</code>) only — it's all <code>localhost</code> in v0.</li>
+  <li>No TLS. <code>crated</code> binds <code>127.0.0.1:7777</code> and speaks HTTP.</li>
+</ul>
+
+<footer>crate-html &middot; local HTML hosting for AI coding agents &middot; <a href="./roadmap.html">what's next</a></footer>
+</html>

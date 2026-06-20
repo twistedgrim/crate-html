@@ -40,10 +40,20 @@ internal/config/    XDG config loader, first-run token generation
 internal/storage/   filesystem ops, tar in/out, atomic site replacement
 internal/server/    net/http handlers — bearer auth on /api, public static serve
 internal/cliclient/ HTTP client used by `crate`
+internal/builtin/   sites embedded in the binary (e.g. cratesplainer)
+testdata/sites/     site fixtures used by smoke tests
 .claude/skills/     Claude Code skill wrapping `crate push`
 ```
 
 One Go module. `internal/wire` is the seam — both binaries import it; they don't import each other.
+
+## Built-in sites
+
+`crated` ships with one site embedded in the binary via `go:embed`:
+
+- **`/cratesplainer/`** — a deliberately-overexplained guide to using crate, useful when a new user lands on the daemon for the first time.
+
+Disk sites win conflicts: if you `crate push cratesplainer ./my-version`, your copy is served instead. `crate rm cratesplainer` removes your override and the built-in resurfaces.
 
 ## Where data lives
 

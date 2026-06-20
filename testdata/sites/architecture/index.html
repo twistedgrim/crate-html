@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>crate-html architecture</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a href="/">&larr; index</a>
+  <a href="/overview/">Overview</a>
+  <a href="/overview/flow.html">Request flow</a>
+  <a href="/overview/api.html">HTTP API</a>
+  <a href="/overview/storage.html">Storage</a>
+</nav>
+
+<h1>crate-html architecture</h1>
+<p>Five components, two binaries, one Go module, no database. This page shows the system from four angles: who-talks-to-whom, what's-in-the-code, what's-on-disk, and what-could-swap-in-later.</p>
+
+<h2>1. System view</h2>
+
+<p>Two binaries (<code>crate</code>, <code>crated</code>) and three outside actors (agent, browser, filesystem). Solid arrows are HTTP. Dashed are process or filesystem calls.</p>
+
+<div class="diagram-wrap">
+<svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="crate-html system view">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+    <style>
+      .lbl { font: 600 13px ui-sans-serif, system-ui, sans-serif; fill: currentColor; }
+      .sub { font: 11px ui-monospace, monospace; fill: var(--muted); }
+      .edge { font: 11px ui-monospace, monospace; fill: var(--muted); }
+      .box { stroke-width: 2; fill: var(--bg); }
+      .line { stroke: currentColor; stroke-width: 1.6; fill: none; }
+      .dash { stroke-dasharray: 5 4; }
+    </style>
+  </defs>
+
+  <!-- Agent -->
+  <g transform="translate(20,40)">
+    <rect class="box" width="150" height="70" rx="8" stroke="var(--agent)" stroke-dasharray="5 4"/>
+    <text class="lbl" x="75" y="32" text-anchor="middle">AI coding agent</text>
+    <text class="sub" x="75" y="52" text-anchor="middle">Claude Code &middot; Pi</text>
+  </g>
+
+  <!-- crate CLI -->
+  <g transform="translate(220,40)">
+    <rect class="box" width="150" height="70" rx="8" stroke="var(--cli)"/>
+    <text class="lbl" x="75" y="32" text-anchor="middle">crate</text>
+    <text class="sub" x="75" y="52" text-anchor="middle">CLI (kong)</text>
+  </g>
+
+  <!-- crated daemon -->
+  <g transform="translate(440,40)">
+    <rect class="box" width="170" height="70" rx="8" stroke="var(--svr)"/>
+    <text class="lbl" x="85" y="32" text-anchor="middle">crated</text>
+    <text class="sub" x="85" y="52" text-anchor="middle">HTTP daemon :7777</text>
+  </g>
+
+  <!-- Browser -->
+  <g transform="translate(640,200)">
+    <rect class="box" width="100" height="70" rx="8" stroke="var(--browser)"/>
+    <text class="lbl" x="50" y="32" text-anchor="middle">browser</text>
+    <text class="sub" x="50" y="52" text-anchor="middle">human</text>
+  </g>
+
+  <!-- Filesystem -->
+  <g transform="translate(360,260)">
+    <rect class="box" width="300" height="80" rx="8" stroke="var(--fs)"/>
+    <text class="lbl" x="150" y="32" text-anchor="middle">filesystem</text>
+    <text class="sub" x="150" y="52" text-anchor="middle">$XDG_CONFIG_HOME/crate/config.yaml</text>
+    <text class="sub" x="150" y="68" text-anchor="middle">$XDG_DATA_HOME/crate/sites/*</text>
+  </g>
+
+  <!-- Edges -->
+  <!-- agent → crate (exec) -->
+  <g color="var(--agent)">
+    <path class="line dash" d="M170,75 L220,75" marker-end="url(#arr)"/>
+    <text class="edge" x="195" y="68" text-anchor="middle">exec</text>
+  </g>
+
+  <!-- crate ↔ crated (HTTP) -->
+  <g color="var(--cli)">
+    <path class="line" d="M370,68 L440,68" marker-end="url(#arr)"/>
+    <text class="edge" x="405" y="60" text-anchor="middle">HTTP + bearer</text>
+  </g>
+  <g color="var(--svr)">
+    <path class="line" d="M440,84 L370,84" marker-end="url(#arr)"/>
+    <text class="edge" x="405" y="100" text-anchor="middle">JSON / tar</text>
+  </g>
+
+  <!-- crate → fs (config read) -->
+  <g color="var(--cli)">
+    <path class="line dash" d="M270,110 L420,260" marker-end="url(#arr)"/>
+    <text class="edge" x="320" y="190" text-anchor="middle" transform="rotate(45 320 190)">reads config</text>
+  </g>
+
+  <!-- crated → fs (sites + config) -->
+  <g color="var(--svr)">
+    <path class="line dash" d="M530,110 L530,260" marker-end="url(#arr)"/>
+    <text class="edge" x="545" y="190" text-anchor="start">read/write sites/</text>
+  </g>
+
+  <!-- browser → crated (static GET) -->
+  <g color="var(--browser)">
+    <path class="line" d="M640,225 L610,100" marker-end="url(#arr)"/>
+    <text class="edge" x="640" y="170" text-anchor="start">GET /&lt;site&gt;/...</text>
+  </g>
+</svg>
+
+<div class="legend">
+  <span><span class="sw" style="background:var(--agent)"></span>agent (external)</span>
+  <span><span class="sw" style="background:var(--cli)"></span>crate CLI</span>
+  <span><span class="sw" style="background:var(--svr)"></span>crated daemon</span>
+  <span><span class="sw" style="background:var(--browser)"></span>browser</span>
+  <span><span class="sw" style="background:var(--fs)"></span>filesystem</span>
+</div>
+</div>
+
+<table>
+<tr><th>Edge</th><th>Protocol</th><th>Auth</th></tr>
+<tr><td>agent &rarr; crate</td><td>shell exec</td><td>OS user</td></tr>
+<tr><td>crate &rarr; crated (mgmt)</td><td>HTTP <code>/api/*</code></td><td>Bearer token (32 random bytes)</td></tr>
+<tr><td>browser &rarr; crated (read)</td><td>HTTP <code>/&lt;site&gt;/...</code></td><td>none &mdash; bound to 127.0.0.1</td></tr>
+<tr><td>crate &rarr; fs</td><td>file read</td><td>file mode 0600 on config</td></tr>
+<tr><td>crated &rarr; fs</td><td>file read/write</td><td>OS user</td></tr>
+</table>
+
+<h2>2. Code view &mdash; Go module structure</h2>
+
+<p>One module, two binaries, six internal packages. <code>internal/wire</code> is the seam: both binaries import it, neither imports each other.</p>
+
+<div class="diagram-wrap">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Go module dependency graph">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+    <style>
+      .pkg { font: 600 12px ui-monospace, monospace; fill: currentColor; }
+      .bin { font: 700 13px ui-monospace, monospace; fill: currentColor; }
+      .b { stroke-width: 2; fill: var(--bg); }
+      .dep { stroke: var(--muted); stroke-width: 1.3; fill: none; opacity: 0.7; }
+    </style>
+  </defs>
+
+  <!-- cmd/crate -->
+  <g transform="translate(20,30)">
+    <rect class="b" width="150" height="44" rx="6" stroke="var(--cli)"/>
+    <text class="bin" x="75" y="28" text-anchor="middle">cmd/crate</text>
+  </g>
+  <!-- cmd/crated -->
+  <g transform="translate(540,30)">
+    <rect class="b" width="160" height="44" rx="6" stroke="var(--svr)"/>
+    <text class="bin" x="80" y="28" text-anchor="middle">cmd/crated</text>
+  </g>
+
+  <!-- internal/cliclient -->
+  <g transform="translate(20,120)">
+    <rect class="b" width="150" height="40" rx="6" stroke="var(--cli)"/>
+    <text class="pkg" x="75" y="25" text-anchor="middle">internal/cliclient</text>
+  </g>
+  <!-- internal/server -->
+  <g transform="translate(540,120)">
+    <rect class="b" width="160" height="40" rx="6" stroke="var(--svr)"/>
+    <text class="pkg" x="80" y="25" text-anchor="middle">internal/server</text>
+  </g>
+
+  <!-- internal/storage -->
+  <g transform="translate(280,120)">
+    <rect class="b" width="160" height="40" rx="6" stroke="var(--fs)"/>
+    <text class="pkg" x="80" y="25" text-anchor="middle">internal/storage</text>
+  </g>
+
+  <!-- internal/wire (the seam) -->
+  <g transform="translate(280,210)">
+    <rect class="b" width="160" height="40" rx="6" stroke="var(--accent)" stroke-dasharray="6 4"/>
+    <text class="pkg" x="80" y="25" text-anchor="middle">internal/wire</text>
+  </g>
+
+  <!-- internal/config -->
+  <g transform="translate(20,210)">
+    <rect class="b" width="150" height="40" rx="6" stroke="var(--muted)"/>
+    <text class="pkg" x="75" y="25" text-anchor="middle">internal/config</text>
+  </g>
+
+  <!-- xdg / kong / yaml (external) -->
+  <g transform="translate(540,210)">
+    <rect class="b" width="160" height="40" rx="6" stroke="var(--muted)" stroke-dasharray="4 3"/>
+    <text class="pkg" x="80" y="25" text-anchor="middle">adrg/xdg, kong, yaml</text>
+  </g>
+
+  <!-- arrows (depends on) -->
+  <g>
+    <!-- cmd/crate -> cliclient, config -->
+    <path class="dep" d="M95,74 L95,120" marker-end="url(#arr2)"/>
+    <path class="dep" d="M70,74 L70,210" marker-end="url(#arr2)"/>
+    <!-- cmd/crated -> server, storage, config -->
+    <path class="dep" d="M620,74 L620,120" marker-end="url(#arr2)"/>
+    <path class="dep" d="M600,74 L380,120" marker-end="url(#arr2)"/>
+    <path class="dep" d="M560,74 L150,210" marker-end="url(#arr2)"/>
+    <!-- cliclient -> storage (tar), wire -->
+    <path class="dep" d="M155,160 L300,210" marker-end="url(#arr2)"/>
+    <path class="dep" d="M170,140 L280,140" marker-end="url(#arr2)"/>
+    <!-- server -> storage, wire -->
+    <path class="dep" d="M540,140 L440,140" marker-end="url(#arr2)"/>
+    <path class="dep" d="M580,160 L400,210" marker-end="url(#arr2)"/>
+    <!-- storage -> wire -->
+    <path class="dep" d="M360,160 L360,210" marker-end="url(#arr2)"/>
+    <!-- config -> external -->
+    <path class="dep" d="M170,230 L540,230" marker-end="url(#arr2)"/>
+  </g>
+</svg>
+</div>
+
+<table>
+<tr><th>Package</th><th>Responsibility</th><th>Depends on</th></tr>
+<tr><td><code>cmd/crate</code></td><td>CLI entrypoint, kong wiring, command handlers</td><td><code>cliclient</code>, <code>config</code></td></tr>
+<tr><td><code>cmd/crated</code></td><td>Daemon entrypoint, <code>http.Server</code> lifecycle, signals</td><td><code>server</code>, <code>storage</code>, <code>config</code></td></tr>
+<tr><td><code>internal/wire</code></td><td>HTTP request/response types &mdash; the contract</td><td>none</td></tr>
+<tr><td><code>internal/config</code></td><td>XDG path resolution, config load, first-run token</td><td><code>adrg/xdg</code>, <code>yaml.v3</code></td></tr>
+<tr><td><code>internal/storage</code></td><td>Sites on disk, tar in/out, atomic replacement, name validation</td><td><code>wire</code></td></tr>
+<tr><td><code>internal/server</code></td><td>HTTP handlers (API + static), bearer auth</td><td><code>storage</code>, <code>wire</code>, <code>config</code></td></tr>
+<tr><td><code>internal/cliclient</code></td><td>HTTP client; tars a local dir into a streaming PUT</td><td><code>storage</code> (for tar), <code>wire</code>, <code>config</code></td></tr>
+</table>
+
+<div class="callout">
+<strong>Why is <code>cliclient</code> allowed to import <code>storage</code>?</strong>
+Only to reuse <code>WriteDirAsTar</code> &mdash; the tar-writing helper is symmetric with the tar-reading helper on the server side, and lives in one place. Everything else in <code>storage</code> is filesystem-side; the CLI doesn't touch it.
+</div>
+
+<h2>3. Deployment view &mdash; what lives where</h2>
+
+<p>Everything is on the laptop. v0 has no remote components.</p>
+
+<pre class="tree"><span class="dir">~/GitHub/crate-html/</span>          <span class="cmt"># source</span>
+  <span class="dir">bin/</span>
+    <span class="file">crate</span>                  <span class="cmt"># the CLI binary</span>
+    <span class="file">crated</span>                 <span class="cmt"># the daemon binary</span>
+
+<span class="dir">~/Library/Application Support/crate/</span>   <span class="cmt"># macOS XDG-equivalent</span>
+  <span class="file">config.yaml</span>            <span class="cmt"># 0600 — port, base URL, token</span>
+  <span class="dir">sites/</span>
+    <span class="dir">welcome/</span>
+    <span class="dir">overview/</span>
+    <span class="dir">cratesplainer/</span>
+    <span class="dir">architecture/</span>         <span class="cmt"># &larr; you are here</span>
+  <span class="dir">log/</span>                   <span class="cmt"># (reserved for future)</span>
+</pre>
+
+<p>On Linux these paths follow the XDG spec: config in <code>~/.config/crate/</code>, data in <code>~/.local/share/crate/</code>, state in <code>~/.local/state/crate/</code>.</p>
+
+<h2>4. Layer cake &mdash; what could swap in later</h2>
+
+<p>The v0 design is deliberately thin so each future capability slots in as a layer without rewriting what's underneath.</p>
+
+<div class="layer-stack">
+  <div class="layer now"><strong>Now &middot; storage</strong> &mdash; filesystem under XDG_DATA_HOME</div>
+  <div class="layer now"><strong>Now &middot; daemon</strong> &mdash; <code>crated</code> binding <code>127.0.0.1:7777</code></div>
+  <div class="layer now"><strong>Now &middot; CLI + HTTP API</strong> &mdash; <code>crate</code> over bearer-authed HTTP</div>
+  <div class="layer now"><strong>Now &middot; static serve</strong> &mdash; <code>http.ServeFile</code> path-routed by site name</div>
+  <div class="layer now"><strong>Now &middot; agent skill</strong> &mdash; Claude Code skill at <code>.claude/skills/crate-push/</code></div>
+  <div class="layer later"><strong>Later &middot; daemon lifecycle</strong> &mdash; launchd plist so <code>crated</code> survives terminal sessions</div>
+  <div class="layer later"><strong>Later &middot; Pi skill</strong> &mdash; same shape as Claude Code skill, different agent</div>
+  <div class="layer later"><strong>Later &middot; TLS / hostname</strong> &mdash; Caddy in front of <code>crated</code>, no code change</div>
+  <div class="layer later"><strong>Later &middot; tailnet exposure</strong> &mdash; reach the daemon from any tailnet device</div>
+  <div class="layer later"><strong>Later &middot; per-site TTLs</strong> &mdash; <code>crate push --expires 24h</code> for ephemeral drafts</div>
+</div>
+
+<p>Layers above the dashed line are running today; the dashed ones are roadmap items. None of them require touching the contract in <code>internal/wire</code>.</p>
+
+<footer>crate-html &middot; <a href="/overview/">overview</a> &middot; <a href="/cratesplainer/">cratesplainer</a> &middot; <a href="/">all sites</a></footer>
+</html>

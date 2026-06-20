@@ -34,7 +34,7 @@ One flag to open the URL in a browser after a successful push. Same as `crate pu
 
 ### Smoke-test suite
 
-The current smoke test is an inline bash script. Wrap it as `task smoke` so it runs in CI and during local refactors.
+The current smoke test is an inline bash script. Wrap it as `task smoke` so it runs in CI and during local refactors. The site fixtures already live in `testdata/sites/` — the harness pushes each one against a freshly-started `crated`, verifies the public URL responds, and tears the daemon down.
 
 ### Unit tests for `internal/storage`
 

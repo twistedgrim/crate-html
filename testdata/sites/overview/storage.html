@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Storage — crate-html</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a href="./">Overview</a>
+  <a href="./flow.html">Request flow</a>
+  <a href="./api.html">HTTP API</a>
+  <a class="active" href="./storage.html">Storage</a>
+  <a href="./roadmap.html">Roadmap</a>
+</nav>
+
+<h1>Storage</h1>
+
+<p>Sites are plain directories on disk. No database. The whole storage layer is &lt;200 lines of Go in <code>internal/storage</code>.</p>
+
+<h2>Where files live</h2>
+
+<p>Paths are resolved via <a href="https://github.com/adrg/xdg"><code>github.com/adrg/xdg</code></a>, which follows the XDG Base Directory Specification on Linux and the platform-native equivalent on macOS.</p>
+
+<table>
+<tr><th>Purpose</th><th>Linux (XDG)</th><th>macOS</th></tr>
+<tr><td>Config (token, port)</td><td><code>~/.config/crate/config.yaml</code></td><td><code>~/Library/Application Support/crate/config.yaml</code></td></tr>
+<tr><td>Sites</td><td><code>~/.local/share/crate/sites/</code></td><td><code>~/Library/Application Support/crate/sites/</code></td></tr>
+<tr><td>Logs</td><td><code>~/.local/state/crate/log/</code></td><td><code>~/Library/Application Support/crate/log/</code></td></tr>
+</table>
+
+<div class="callout warn">
+<strong>macOS note.</strong>
+<code>adrg/xdg</code> defers to <code>~/Library/Application Support</code> on macOS by default. If you'd rather have pure XDG layout on macOS too, set <code>XDG_DATA_HOME=$HOME/.local/share</code> (and friends) in your shell and the library will respect it.
+</div>
+
+<h2>Site layout</h2>
+
+<pre>~/Library/Application Support/crate/sites/
+&lt;name&gt;/
+    index.html
+    style.css
+    sub/
+        page.html
+
+# transient (only present mid-upload):
+.&lt;name&gt;.stage-7xq2/   &mdash; new copy being written
+.&lt;name&gt;.old-17181...  &mdash; previous copy, deleted on success</pre>
+
+<h2>Atomic replacement</h2>
+
+<p>A <code>crate push</code> must not leave a half-replaced site if anything fails &mdash; a partial overwrite breaks every reader. The replacement is a three-step rename:</p>
+
+<div class="diagram vert">
+  <div class="node fs">extract tar &rarr; sites/.foo.stage-7xq2/</div>
+  <div class="arrow">&darr;&nbsp;if extraction fails, rm stage and bail &mdash; foo/ untouched</div>
+  <div class="node fs">rename sites/foo &rarr; sites/.foo.old-1718...</div>
+  <div class="arrow">&darr;</div>
+  <div class="node fs">rename sites/.foo.stage-7xq2 &rarr; sites/foo</div>
+  <div class="arrow">&darr;&nbsp;if rename fails, rename old back in place</div>
+  <div class="node fs">rm sites/.foo.old-1718...</div>
+</div>
+
+<p>Both renames are within the same directory, so they're atomic on every POSIX filesystem. The window where neither <code>foo/</code> nor anything-named-<code>foo</code> exists is bounded by one syscall.</p>
+
+<h2>Name validation</h2>
+
+<p>Site names must match:</p>
+<pre>^[a-z0-9][a-z0-9._-]{0,62}$</pre>
+
+<p>That's:</p>
+<ul>
+  <li>Lowercase letter or digit first (no leading dot or hyphen).</li>
+  <li>1&ndash;63 characters total.</li>
+  <li>Only letters, digits, dot, hyphen, underscore.</li>
+</ul>
+
+<p>The pattern keeps names URL-safe, filesystem-safe on every OS, and avoids surprises like a site called <code>.git</code> or <code>../etc</code>.</p>
+
+<h2>Tar-path safety</h2>
+
+<p>Every tar entry's path is cleaned and checked before any file is opened:</p>
+
+<pre>clean := filepath.Clean(hdr.Name)
+if strings.HasPrefix(clean, "..") ||
+   strings.HasPrefix(clean, "/")  ||
+   strings.Contains(clean, "/../") {
+    return ErrUnsafePath
+}</pre>
+
+<p>Symlinks and hardlinks are silently skipped &mdash; they can't escape a sandbox that doesn't honor them. Devices, FIFOs, and other special files are also skipped.</p>
+
+<footer><a href="./api.html">&larr; HTTP API</a> &middot; next: <a href="./roadmap.html">roadmap</a></footer>
+</html>

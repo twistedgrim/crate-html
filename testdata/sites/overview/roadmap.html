@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Roadmap — crate-html</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a href="./">Overview</a>
+  <a href="./flow.html">Request flow</a>
+  <a href="./api.html">HTTP API</a>
+  <a href="./storage.html">Storage</a>
+  <a class="active" href="./roadmap.html">Roadmap</a>
+</nav>
+
+<h1>Roadmap</h1>
+
+<p>v0 is intentionally small. Each item below is a clean layer over the current code &mdash; not a rewrite.</p>
+
+<h2>Near-term</h2>
+
+<h3>1. Daemon lifecycle on macOS</h3>
+<p>Today <code>crated</code> runs in the foreground; if you close the terminal, it dies. A small launchd plist (<code>~/Library/LaunchAgents/com.crate-html.crated.plist</code>) would survive shell sessions and start on login. Optional <code>brew services</code> integration follows naturally.</p>
+
+<h3>2. Pi coding agent skill</h3>
+<p>The Claude Code skill is in <code>.claude/skills/crate-push/SKILL.md</code>. The Pi-side equivalent is the same shape &mdash; a manifest that wraps <code>crate push</code>. Same API, different agent.</p>
+
+<div class="callout">
+<strong>"Pi" here means the Pi coding agent.</strong>
+A peer to Claude Code, not Raspberry Pi hardware. crate-html has no embedded-hardware story.
+</div>
+
+<h3>3. <code>crate push --open</code></h3>
+<p>One-flag shortcut to open the URL in a browser after a successful push. Same as running <code>crate push</code> then <code>crate open</code>, but with one fewer step.</p>
+
+<h2>Medium-term</h2>
+
+<h3>4. TLS via Caddy</h3>
+<p>If you ever want a real hostname instead of <code>localhost:7777</code>, put Caddy in front:</p>
+<pre>crate.local {
+  reverse_proxy 127.0.0.1:7777
+}</pre>
+<p>No code change in <code>crated</code>. Caddy handles certs, vhosts, HTTP/2, the works.</p>
+
+<h3>5. Tailnet exposure</h3>
+<p>Run <code>crated</code> on the laptop and reach it from any device on your tailnet via the Mac's <code>100.x.y.z</code> address. Combined with Caddy + a real hostname, this is the "share a draft with your phone" loop.</p>
+
+<h3>6. <code>crate logs &lt;site&gt;</code></h3>
+<p>Per-site access log tail. Useful to see what an agent (or a human) actually fetched after a push.</p>
+
+<h2>Things we are explicitly not doing</h2>
+
+<table>
+<tr><th>Not doing</th><th>Why</th></tr>
+<tr><td>Database</td><td>Filesystem is enough. <code>readdir</code> is the index.</td></tr>
+<tr><td>Multi-tenant auth</td><td>One human, one machine. Single bearer token.</td></tr>
+<tr><td>Server-side rendering</td><td>Sites are static. If you want SSR, render to static first, then push.</td></tr>
+<tr><td>Vhosts in <code>crated</code></td><td>Path routing is enough. Caddy can rewrite if you ever want vhosts.</td></tr>
+<tr><td>Embedded hardware</td><td>v0 is laptop-only. Agents call into it, not the other way around.</td></tr>
+</table>
+
+<h2>Far future</h2>
+
+<p>Open shape, not committed:</p>
+<ul>
+  <li><strong>Diff views.</strong> If <code>crate push</code> notices a name already exists, show what changed file-by-file.</li>
+  <li><strong>TTLs.</strong> <code>crate push --expires 24h</code> for ephemeral drafts that self-clean.</li>
+  <li><strong>Templates.</strong> <code>crate new plan</code> scaffolds a starter site so agents don't have to generate the boring chrome each time.</li>
+</ul>
+
+<footer><a href="./storage.html">&larr; storage</a> &middot; <a href="./">back to overview</a></footer>
+</html>

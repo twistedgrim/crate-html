@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Request flow — crate-html</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a href="./">Overview</a>
+  <a class="active" href="./flow.html">Request flow</a>
+  <a href="./api.html">HTTP API</a>
+  <a href="./storage.html">Storage</a>
+  <a href="./roadmap.html">Roadmap</a>
+</nav>
+
+<h1>Request flow</h1>
+
+<p>Two flows: <strong>push</strong> (agent puts bytes in) and <strong>serve</strong> (human gets bytes out). Both share the same HTTP server.</p>
+
+<h2>Push flow</h2>
+
+<div class="diagram vert">
+  <div class="node cli">crate push ./site foo</div>
+  <div class="arrow">&darr;&nbsp;reads ~/.config/crate/config.yaml (token, base URL)</div>
+  <div class="node tar">tar stream via io.Pipe (no temp file, no buffering)</div>
+  <div class="arrow">&darr;&nbsp;PUT /api/sites/foo, Authorization: Bearer ...</div>
+  <div class="node svr">crated</div>
+  <div class="arrow">&darr;&nbsp;extract into .foo.stage-&lt;rand&gt;/, validate paths</div>
+  <div class="node fs">sites/.foo.stage-7xq2/</div>
+  <div class="arrow">&darr;&nbsp;rename(old &rarr; .foo.old-&lt;ts&gt;), rename(stage &rarr; foo), rm old</div>
+  <div class="node fs">sites/foo/</div>
+  <div class="arrow">&darr;&nbsp;200 OK { site, url }</div>
+  <div class="node cli">prints http://localhost:7777/foo/</div>
+</div>
+
+<p>The push body is a raw tar stream — no JSON envelope. That keeps the upload streamable (CLI hasn't seen the whole archive when it starts sending) and means no temp file on either side.</p>
+
+<div class="callout">
+<strong>Streaming via io.Pipe.</strong>
+On the CLI: one goroutine walks the directory and writes tar entries into the write end; the HTTP client reads from the read end. The first byte goes out before the last file is even opened.
+</div>
+
+<h2>Serve flow</h2>
+
+<div class="diagram vert">
+  <div class="node cli">browser &mdash; GET /foo/about.html</div>
+  <div class="arrow">&darr;</div>
+  <div class="node svr">crated mux</div>
+  <div class="arrow">&darr;&nbsp;split path, validate "foo" against site name regex</div>
+  <div class="node svr">stat sites/foo/ &mdash; exists?</div>
+  <div class="arrow">&darr;&nbsp;path.Clean("/about.html") &mdash; reject any escape</div>
+  <div class="node fs">sites/foo/about.html</div>
+  <div class="arrow">&darr;&nbsp;http.ServeFile</div>
+  <div class="node cli">200 OK, text/html</div>
+</div>
+
+<p>The static side reuses stdlib's <code>http.ServeFile</code>, which gives range requests, ETags, and correct content-types for free. The job of the handler is just to map the public URL to a safe filesystem path.</p>
+
+<h3>Three URL shapes the server handles</h3>
+<table>
+<tr><th>URL</th><th>Result</th></tr>
+<tr><td><code>/</code></td><td>HTML index of deployed sites</td></tr>
+<tr><td><code>/foo</code></td><td>302 to <code>/foo/</code> (so relative links work)</td></tr>
+<tr><td><code>/foo/</code></td><td>serves <code>foo/index.html</code></td></tr>
+<tr><td><code>/foo/bar/baz.css</code></td><td>serves <code>foo/bar/baz.css</code></td></tr>
+<tr><td><code>/foo/../etc/passwd</code></td><td>404 (path traversal blocked by <code>path.Clean</code>)</td></tr>
+</table>
+
+<footer><a href="./">&larr; overview</a> &middot; next: <a href="./api.html">HTTP API</a></footer>
+</html>

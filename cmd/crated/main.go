@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/server"
 	"github.com/Twistedgrim/crate-html/internal/storage"
@@ -40,7 +41,7 @@ func run() error {
 	logger.Printf("listen: %s", cfg.BaseURL)
 
 	store := storage.New(paths.SitesDir)
-	srv := server.New(cfg, store, logger)
+	srv := server.New(cfg, store, builtin.Sites(), logger)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,

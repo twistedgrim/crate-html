@@ -1,0 +1,30 @@
+<!doctype html><meta charset=utf-8><title>Code review</title>
+<style>
+body{font-family:system-ui;max-width:48em;margin:2em auto;padding:0 1em;line-height:1.55}
+.finding{padding:1em;border-radius:6px;margin:.75em 0}
+.f-low{background:#eef;border-left:4px solid #66c}
+.f-med{background:#fed;border-left:4px solid #e90}
+.f-high{background:#fee;border-left:4px solid #c33}
+code{background:#eee;padding:.1em .35em;border-radius:3px;font-family:ui-monospace,monospace}
+.path{font-family:ui-monospace,monospace;font-size:.85em;color:#666}
+</style>
+<h1>Review: crate-html scaffold</h1>
+<p>3 findings across the freshly scaffolded daemon.</p>
+
+<div class="finding f-med">
+<strong>MED &middot; Path-traversal defense relies on path.Clean</strong>
+<div class="path">internal/server/server.go:139</div>
+<p>The current logic <code>siteDir + path.Clean("/" + rest)</code> works, but a future refactor that splits the cleaning step from the join would silently break. Wrap it in a helper that returns an error if the cleaned path escapes the site root.</p>
+</div>
+
+<div class="finding f-low">
+<strong>LOW &middot; tar.TypeRegA is deprecated</strong>
+<div class="path">internal/storage/storage.go:175</div>
+<p>Already nolint'd, but worth dropping in a follow-up — Go 1.26 still defines it but it has been unused by archive/tar's own writer since Go 1.11.</p>
+</div>
+
+<div class="finding f-low">
+<strong>LOW &middot; No CLI flag for config path override</strong>
+<div class="path">cmd/crate/main.go, cmd/crated/main.go</div>
+<p>Useful for testing and for running multiple instances. Single <code>--config</code> flag would cover it.</p>
+</div>

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>crate-html</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    max-width: 42rem;
+    margin: 3rem auto;
+    padding: 0 1.25rem;
+    line-height: 1.55;
+  }
+  h1 { letter-spacing: -0.02em; }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  pre {
+    background: rgba(127,127,127,0.12);
+    padding: 0.85rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.92em;
+  }
+  code:not(pre code) {
+    background: rgba(127,127,127,0.12);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+  }
+  .pill {
+    display: inline-block;
+    font-size: 0.78em;
+    padding: 0.15em 0.55em;
+    border-radius: 999px;
+    background: rgba(80,180,120,0.18);
+    color: #2f9e63;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+  }
+  hr { border: none; border-top: 1px solid rgba(127,127,127,0.25); margin: 2rem 0; }
+  footer { color: #888; font-size: 0.85em; }
+</style>
+
+<h1>crate-html <span class="pill">v0 alive</span></h1>
+
+<p>If you are reading this, the daemon is running, your HTML was tarred up, streamed to <code>PUT /api/sites/welcome</code>, and is now being served back out of <code>$XDG_DATA_HOME/crate/sites/welcome/</code>.</p>
+
+<h2>Try it</h2>
+<pre>crate push ./some-dir my-site
+crate ls
+crate open my-site</pre>
+
+<h2>Where things live</h2>
+<ul>
+  <li>Config: <code>~/.config/crate/config.yaml</code></li>
+  <li>Sites: <code>~/.local/share/crate/sites/</code></li>
+  <li>Daemon: <code>http://localhost:7777</code> (bound to 127.0.0.1)</li>
+</ul>
+
+<hr>
+<footer>crate-html — local HTML hosting for AI coding agents.</footer>
+</html>

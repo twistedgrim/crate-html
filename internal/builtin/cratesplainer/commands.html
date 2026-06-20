@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>The Commands &middot; cratesplainer</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a href="./">Welcome (Listen)</a>
+  <a class="active" href="./commands.html">The Commands (Pay Attention)</a>
+  <a href="./gotchas.html">Gotchas (Trust Me)</a>
+</nav>
+
+<h1>The Commands</h1>
+<p class="sub">There are five. I'll cover all of them. Don't worry if it takes a while.</p>
+
+<h2><code>crate push</code></h2>
+
+<p>This is the big one. <em>The</em> command. If you only learn one, learn this one. (But you should learn all of them. I'll cover all of them. I just said that.)</p>
+
+<pre>crate push ./mysite mysite</pre>
+
+<div class="aside so">
+the first argument is the directory, and the second argument is the name. They're different. The directory contains files; the name does not. I know it can be confusing because they're both words.
+</div>
+
+<p>What this does, mechanically &mdash; and I think this is important to understand &mdash; is it walks the directory, creates a tar archive in memory, streams it over HTTP, the daemon extracts it, swaps it into place, and returns a URL.</p>
+
+<div class="aside fyi">
+a "tar" is a Unix archive format from 1979. It stands for "tape archive." Because originally it was for tapes. Like, magnetic tapes. You've probably seen them in movies.
+</div>
+
+<h2><code>crate ls</code></h2>
+
+<p>"ls" comes from the Unix command "ls", which lists things. So this lists things. Specifically, sites.</p>
+
+<pre>$ crate ls
+welcome                    1 file    1735 bytes  2026-06-20 13:38
+overview                   6 files  21190 bytes  2026-06-20 13:42
+cratesplainer              4 files   ~xxxx bytes  2026-06-20 13:55</pre>
+
+<div class="aside>
+that last one is you. You're looking at it right now. Crazy, right? You're inside the thing you're learning about. That's called recursion. I can explain recursion if you want.
+</div>
+
+<h2><code>crate rm</code></h2>
+
+<p>"rm" stands for "remove." This removes things. Sites, specifically.</p>
+
+<pre>crate rm old-plan</pre>
+
+<div class="tip">
+<strong>Note:</strong> there is no "are you sure?" prompt. That's not an oversight. That's a deliberate design choice. The thinking is: you typed the name, you meant it. If you didn't mean it, push it again. Storage is cheap. Confirmation prompts are expensive (in attention, not money).
+</div>
+
+<h2><code>crate open</code></h2>
+
+<p>This opens a site in your browser. Your default browser. The one you set, or the one your operating system chose for you while you weren't looking.</p>
+
+<pre>crate open mysite</pre>
+
+<div class="aside well">
+on macOS this calls <code>open</code>. On Linux it calls <code>xdg-open</code>. On Windows it calls <code>rundll32 url.dll,FileProtocolHandler</code>, which is, frankly, a war crime, but Microsoft made me do it.
+</div>
+
+<h2><code>crate status</code></h2>
+
+<p>This tells you if the daemon is up. Useful when nothing else is working and you've started to suspect the daemon might not be up.</p>
+
+<pre>$ crate status
+crated 0.1.0-dev  base=http://localhost:7777  sites=3</pre>
+
+<p>If you get a connection-refused error: the daemon is not up. Run <code>crated</code> in another terminal. There. You did it. I'm proud of you.</p>
+
+<footer>Continue to <a href="./gotchas.html">the gotchas &rarr;</a> (this is where the real wisdom is)</footer>
+</html>

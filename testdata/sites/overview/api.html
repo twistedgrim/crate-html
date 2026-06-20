@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>HTTP API — crate-html</title>
+<link rel="stylesheet" href="./style.css">
+
+<nav class="top">
+  <a href="./">Overview</a>
+  <a href="./flow.html">Request flow</a>
+  <a class="active" href="./api.html">HTTP API</a>
+  <a href="./storage.html">Storage</a>
+  <a href="./roadmap.html">Roadmap</a>
+</nav>
+
+<h1>HTTP API</h1>
+
+<p>Five endpoints. Types live in <code>internal/wire</code>, used by both the daemon and the CLI's HTTP client.</p>
+
+<h2>Authentication</h2>
+
+<p>All <code>/api/*</code> endpoints require a bearer token:</p>
+<pre>Authorization: Bearer &lt;token from ~/.config/crate/config.yaml&gt;</pre>
+
+<p>The token is generated on first run by the daemon (32 random bytes, hex-encoded) and stored with <code>0600</code> permissions. The server compares with <code>subtle.ConstantTimeCompare</code> &mdash; cheap insurance against timing oracles even though this is localhost-only today.</p>
+
+<p>The public static paths (<code>/</code>, <code>/&lt;site&gt;/...</code>) require no auth &mdash; that's the point.</p>
+
+<h2>Endpoints</h2>
+
+<h3>GET /api/status</h3>
+<p>Unauthenticated. Returns daemon version and site count. Useful as a health check.</p>
+<pre>{
+  "version": "0.1.0-dev",
+  "site_count": 5
+}</pre>
+
+<h3>GET /api/sites</h3>
+<p>Lists deployed sites with metadata.</p>
+<pre>{
+  "sites": [
+    {
+      "name": "welcome",
+      "updated_at": "2026-06-20T13:38:00Z",
+      "size_bytes": 1735,
+      "file_count": 1
+    }
+  ]
+}</pre>
+
+<h3>PUT /api/sites/{name}</h3>
+<p>Replaces the site at <code>{name}</code> with the contents of the request body. The body is a raw tar stream &mdash; no JSON wrapper, no multipart.</p>
+
+<table>
+<tr><th>Field</th><th>Constraint</th></tr>
+<tr><td><code>name</code></td><td>matches <code>^[a-z0-9][a-z0-9._-]{0,62}$</code></td></tr>
+<tr><td>body</td><td><code>application/x-tar</code></td></tr>
+<tr><td>tar entries</td><td>regular files and directories only; symlinks/hardlinks silently skipped; paths starting with <code>..</code> or <code>/</code> are rejected</td></tr>
+</table>
+
+<p>Response:</p>
+<pre>{
+  "site": { "name": "foo", "size_bytes": 1234, "file_count": 3, "updated_at": "..." },
+  "url":  "http://localhost:7777/foo/"
+}</pre>
+
+<h3>DELETE /api/sites/{name}</h3>
+<p>Removes the site directory. Returns <code>204 No Content</code> on success, <code>404</code> if the site doesn't exist.</p>
+
+<h3>Public static paths</h3>
+<p>Anything outside <code>/api/*</code> is treated as static content. The first path segment selects the site; everything after is the file path within that site.</p>
+
+<h2>Error responses</h2>
+<p>Non-2xx responses always carry a JSON body:</p>
+<pre>{ "error": "human-readable message" }</pre>
+<p>The CLI surfaces the message as <code>crated: 401 Unauthorized: invalid token</code>.</p>
+
+<footer><a href="./flow.html">&larr; request flow</a> &middot; next: <a href="./storage.html">storage</a></footer>
+</html>
