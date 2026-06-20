@@ -1,0 +1,13 @@
+bin/
+*.test
+*.out
+.DS_Store
+.env
+.envrc.local
+
+# Editor
+.vscode/*.log
+.idea/
+
+# Go
+/vendor/
