@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/adrg/xdg"
 	"gopkg.in/yaml.v3"
@@ -20,6 +21,17 @@ const (
 	configFileName = "config.yaml"
 	defaultPort    = 7777
 	tokenBytes     = 32
+)
+
+// Environment variable names that override the corresponding config fields.
+// Used primarily for containerized deployments where the on-disk config
+// can't carry deploy-specific values (notably ListenAddr, which must be
+// 0.0.0.0 inside a container even when the user wants 127.0.0.1 outside it).
+const (
+	EnvPort       = "CRATE_PORT"
+	EnvListenAddr = "CRATE_LISTEN_ADDR"
+	EnvBaseURL    = "CRATE_BASE_URL"
+	EnvToken      = "CRATE_TOKEN"
 )
 
 // Config is the on-disk shape of config.yaml.
@@ -66,7 +78,9 @@ func ResolvePaths() (Paths, error) {
 }
 
 // LoadOrInit reads the config file, creating a default one (with a freshly
-// generated token) if it does not yet exist.
+// generated token) if it does not yet exist. Environment variables override
+// fields after defaults are applied but the saved file is not rewritten —
+// env-var overrides stay process-local.
 func LoadOrInit(paths Paths) (Config, error) {
 	data, err := os.ReadFile(paths.ConfigFile)
 	if errors.Is(err, os.ErrNotExist) {
@@ -77,6 +91,7 @@ func LoadOrInit(paths Paths) (Config, error) {
 		if werr := Save(paths, cfg); werr != nil {
 			return Config{}, werr
 		}
+		applyEnv(&cfg)
 		return cfg, nil
 	}
 	if err != nil {
@@ -88,6 +103,7 @@ func LoadOrInit(paths Paths) (Config, error) {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 	applyDefaults(&cfg)
+	applyEnv(&cfg)
 	return cfg, nil
 }
 
@@ -125,6 +141,23 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = fmt.Sprintf("http://localhost:%d", cfg.Port)
+	}
+}
+
+func applyEnv(cfg *Config) {
+	if v := os.Getenv(EnvPort); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Port = n
+		}
+	}
+	if v := os.Getenv(EnvListenAddr); v != "" {
+		cfg.ListenAddr = v
+	}
+	if v := os.Getenv(EnvBaseURL); v != "" {
+		cfg.BaseURL = v
+	}
+	if v := os.Getenv(EnvToken); v != "" {
+		cfg.Token = v
 	}
 }
 

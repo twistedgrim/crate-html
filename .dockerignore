@@ -1,0 +1,30 @@
+# Build artifacts
+bin/
+
+# Repo metadata not needed in the image
+.git/
+.github/
+.vscode/
+.idea/
+
+# Local config / state
+.envrc
+.envrc.local
+.env
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Docs and tests aren't needed for the build — but go.mod still wants
+# everything that's imported, so we deliberately don't exclude
+# internal/builtin/cratesplainer/ or anything under cmd/, internal/.
+docs/
+testdata/
+scripts/
+
+# Things checked in but not used by the build
+HANDOFF.md
+README.md
+LICENSE
+.claude/

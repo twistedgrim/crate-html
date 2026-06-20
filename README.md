@@ -18,6 +18,22 @@ task build              # produces ./bin/crate and ./bin/crated
 
 Default URL is `http://localhost:7777/`. The daemon binds to `127.0.0.1` only.
 
+### Docker
+
+For a persistent daemon that survives terminal sessions:
+
+```bash
+task docker:build       # build the crate-html image
+task docker:up          # start crated on :7777 with persistent volumes
+task docker:token       # read the auto-generated bearer token from the volume
+task docker:logs        # tail the container's logs
+task docker:down        # stop the container (volumes preserved)
+```
+
+The host `crate` CLI works against the dockerized daemon if both use the same token. Copy the token from `task docker:token` into `~/.config/crate/config.yaml` (or `~/Library/Application Support/crate/config.yaml` on macOS), and the CLI will reach the container at `localhost:7777`.
+
+`task docker:nuke` deletes the volumes too — use when you want a clean slate.
+
 ## CLI
 
 ```

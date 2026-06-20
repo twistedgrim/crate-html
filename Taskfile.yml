@@ -41,6 +41,48 @@ tasks:
       - task: build
       - "{{.BIN_DIR}}/crated"
 
+  smoke:
+    desc: End-to-end smoke test against an isolated crated on port 17777
+    cmds:
+      - ./scripts/smoke.sh
+
+  docker:build:
+    desc: Build the crate-html Docker image
+    cmds:
+      - docker compose build
+
+  docker:up:
+    desc: Start crated in Docker (port 7777, persistent volumes)
+    cmds:
+      - docker compose up -d
+      - sleep 1
+      - docker compose ps
+
+  docker:down:
+    desc: Stop the crated container (volumes preserved)
+    cmds:
+      - docker compose down
+
+  docker:nuke:
+    desc: Stop the container and DELETE the config + data volumes
+    cmds:
+      - docker compose down -v
+
+  docker:logs:
+    desc: Tail the crated container logs
+    cmds:
+      - docker compose logs -f crated
+
+  docker:token:
+    desc: Print the bearer token from the dockerized daemon's config volume
+    cmds:
+      - docker compose exec crated cat /config/crate/config.yaml
+
+  docker:shell:
+    desc: Exec a shell into the running crated container
+    cmds:
+      - docker compose exec crated sh
+
   clean:
     desc: Remove build artifacts
     cmds:

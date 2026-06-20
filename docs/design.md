@@ -46,6 +46,19 @@ Reason: if you ever expose the daemon (Caddy, tailnet, anything), retrofitting a
 
 Static serve paths (`/`, `/<site>/...`) require no auth — that's the whole point.
 
+## Env-var overrides on config
+
+`crated` reads `config.yaml` from XDG_CONFIG_HOME, then applies these env vars on top:
+
+| Env var | Overrides |
+|---|---|
+| `CRATE_PORT` | `port` |
+| `CRATE_LISTEN_ADDR` | `listen_addr` |
+| `CRATE_BASE_URL` | `base_url` |
+| `CRATE_TOKEN` | `token` |
+
+Overrides stay process-local — the on-disk config isn't rewritten. The mechanism exists for one specific case: containers. Inside Docker, `crated` must bind `0.0.0.0:7777` for the port mapping to work; outside, it must bind `127.0.0.1`. An env-var override in the Dockerfile (`ENV CRATE_LISTEN_ADDR=0.0.0.0:7777`) handles this without needing two different config files.
+
 ## Localhost-only binding
 
 `crated` binds `127.0.0.1:7777` by default, not `:7777`. v0 is laptop-only. Binding all interfaces would make the daemon reachable from anything on the same network without HTTPS or a real auth story, and the token-in-yaml setup isn't built for that.

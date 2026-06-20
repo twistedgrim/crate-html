@@ -1,0 +1,26 @@
+services:
+  crated:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: crate-html:dev
+    container_name: crated
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+    volumes:
+      - crate-config:/config
+      - crate-data:/data
+    # `CRATE_LISTEN_ADDR=0.0.0.0:7777` is set in the Dockerfile so the daemon
+    # accepts connections forwarded by Docker. Override here if you want a
+    # different port inside the container.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/crate", "status"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+
+volumes:
+  crate-config:
+  crate-data:
