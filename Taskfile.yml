@@ -78,6 +78,15 @@ tasks:
     cmds:
       - docker compose exec crated cat /config/crate/config.yaml
 
+  docker:env:
+    desc: Print env-var exports to point the host CLI at the dockerized daemon. Use `eval $(task docker:env)`.
+    silent: true
+    cmds:
+      - |
+        TOKEN=$(docker compose exec -T crated cat /config/crate/config.yaml | awk '/^token:/{print $2}')
+        echo "export CRATE_TOKEN=$TOKEN"
+        echo "export CRATE_BASE_URL=http://localhost:7777"
+
   docker:shell:
     desc: Exec a shell into the running crated container
     cmds:

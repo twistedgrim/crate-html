@@ -30,7 +30,15 @@ task docker:logs        # tail the container's logs
 task docker:down        # stop the container (volumes preserved)
 ```
 
-The host `crate` CLI works against the dockerized daemon if both use the same token. Copy the token from `task docker:token` into `~/.config/crate/config.yaml` (or `~/Library/Application Support/crate/config.yaml` on macOS), and the CLI will reach the container at `localhost:7777`.
+The host `crate` CLI talks to the dockerized daemon via env vars — no config-file editing required:
+
+```bash
+eval "$(task docker:env)"          # exports CRATE_TOKEN and CRATE_BASE_URL
+./bin/crate ls                     # now talks to the dockerized daemon
+./bin/crate push ./my-site demo
+```
+
+The env vars override anything in `config.yaml` for the lifetime of the shell. Unset them or open a new terminal to go back to the host-side daemon.
 
 `task docker:nuke` deletes the volumes too — use when you want a clean slate.
 
