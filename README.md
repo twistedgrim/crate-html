@@ -85,3 +85,7 @@ task tidy       # go mod tidy
 ## Inspiration
 
 [ClawBox](https://github.com/openclaw/clawbox) — a plug-and-play appliance hosting an agent-facing service. crate-html is the same shape, specialized for HTML, and runs locally rather than as an appliance.
+
+## License
+
+[MIT](LICENSE). Share, modify, ship it in your product — just keep the license notice with any substantial copy.
