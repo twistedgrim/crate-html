@@ -8,19 +8,19 @@ v0 is intentionally small. Every item below is a clean layer over the current co
 
 1. **Terminal session** — `./bin/crated` in a foreground shell. Default for casual use.
 2. **Taskfile** — `task run` (build + foreground). Convenient during development.
-3. **Docker** — for persistent operation. The planned next step (see below).
+3. **Docker** — for persistent operation. *Shipped.* See README + `task docker:*`.
 4. **Reverse proxy in front** — Caddy or nginx for TLS, vhosts, IP-allowlisting.
 5. **Kubernetes with Gateway API** — if you want to go nuts.
 
 No host-level service manager (launchd, systemd, `brew services`) is in scope. The daemon stays portable; persistence is a layer above it.
 
+## Recently shipped
+
+- **Docker.** Multi-stage build, alpine runtime, named volumes for `/config` and `/data`, `task docker:{build,up,down,nuke,logs,token,env,shell}`, env-var overrides for in-container binding.
+- **Smoke harness.** `task smoke` runs `scripts/smoke.sh` against an isolated `crated` on port 17777, exercising every `testdata/sites/*` fixture plus the built-in cratesplainer, ls/rm, path-traversal block, and bearer-token enforcement.
+- **`internal/storage` unit tests.** Table-driven coverage of `ValidateName`, happy-path extraction, atomic overwrite without leaked stage/old dirs, traversal rejection, symlink stripping, and `WriteDirAsTar` → `ReplaceFromTar` round-trip.
+
 ## Near-term
-
-### Docker
-
-Dockerfile + docker-compose for running `crated` as a persistent container. Taskfile gains `docker:build`, `docker:up`, `docker:down`. Site data and config mount in as volumes so they survive container rebuilds.
-
-This is the next chunk of work after v0.
 
 ### Pi coding agent skill
 
@@ -32,13 +32,13 @@ The Claude Code skill at `.claude/skills/crate-push/SKILL.md` is the template. T
 
 One flag to open the URL in a browser after a successful push. Same as `crate push` then `crate open`, with one fewer step.
 
-### Smoke-test suite
+### GitHub Actions CI
 
-The current smoke test is an inline bash script. Wrap it as `task smoke` so it runs in CI and during local refactors. The site fixtures already live in `testdata/sites/` — the harness pushes each one against a freshly-started `crated`, verifies the public URL responds, and tears the daemon down.
+Run `go test ./...`, `task smoke`, and `task docker:build` on every push so `main` stays green without needing James's laptop.
 
-### Unit tests for `internal/storage`
+### More unit-test coverage
 
-The atomic-replacement and tar-extraction paths are the highest-risk code in the repo. Cover them with table-driven tests: clean push, partial-extract failure, path-traversal rejection, symlink stripping.
+`internal/cliclient`, `internal/server`, and `internal/config` currently have no tests. Highest-leverage targets: server's `handlePublic` disk-vs-builtin routing, config's env-var overrides, and the CLI client's auth header.
 
 ## Medium-term
 

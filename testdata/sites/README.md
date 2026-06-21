@@ -1,6 +1,6 @@
 # Smoke test fixtures
 
-Static-site fixtures used by the (forthcoming) smoke-test harness. Each subdirectory is a self-contained site that should round-trip cleanly through `crate push` → daemon storage → HTTP GET → expected response.
+Static-site fixtures used by the smoke-test harness (`task smoke`, driven by `scripts/smoke.sh`). Each subdirectory is a self-contained site that should round-trip cleanly through `crate push` → daemon storage → HTTP GET → expected response.
 
 | Site | Why it's here |
 |---|---|

@@ -4,19 +4,21 @@ Local HTML hosting for AI coding agents.
 
 An agent (Claude Code, Pi, anything that can shell out) generates a directory of static HTML, runs `crate push ./dir name`, and gets back `http://localhost:7777/name/`. The human opens that URL and sees the rendered artifact — a plan, an explainer, a code review — instead of skimming raw markdown in a chat window.
 
-Status: **v0.1.0-dev** — laptop-only, no Docker, no Caddy, no Tailscale.
+Status: **v0.1.0-dev** — laptop-only out of the box, optional Docker for persistence. Caddy/Tailscale are roadmap.
 
 ## Quickstart
 
+Requires Go 1.26+ and [Task](https://taskfile.dev) (`brew install go-task`).
+
 ```bash
 task build              # produces ./bin/crate and ./bin/crated
-./bin/crated &          # starts the daemon, generates config + token on first run
+./bin/crated &          # starts the daemon, generates config + token on first run of either binary
 ./bin/crate status      # confirm the daemon is up
 ./bin/crate push ./some-html-dir my-site
 ./bin/crate open my-site
 ```
 
-Default URL is `http://localhost:7777/`. The daemon binds to `127.0.0.1` only.
+Default URL is `http://localhost:7777/`. The daemon binds to `127.0.0.1` only (override with `CRATE_LISTEN_ADDR`).
 
 ### Docker
 
@@ -25,7 +27,7 @@ For a persistent daemon that survives terminal sessions:
 ```bash
 task docker:build       # build the crate-html image
 task docker:up          # start crated on :7777 with persistent volumes
-task docker:token       # read the auto-generated bearer token from the volume
+task docker:token       # print the daemon's full config from the volume (includes the token)
 task docker:logs        # tail the container's logs
 task docker:down        # stop the container (volumes preserved)
 ```
@@ -62,7 +64,7 @@ cmd/crated/         HTTP daemon
 internal/wire/      request/response types — the API contract
 internal/config/    XDG config loader, first-run token generation
 internal/storage/   filesystem ops, tar in/out, atomic site replacement
-internal/server/    net/http handlers — bearer auth on /api, public static serve
+internal/server/    net/http handlers — bearer auth on /api/sites (status is public), static serve
 internal/cliclient/ HTTP client used by `crate`
 internal/builtin/   sites embedded in the binary (e.g. cratesplainer)
 testdata/sites/     site fixtures used by smoke tests
@@ -77,7 +79,7 @@ One Go module. `internal/wire` is the seam — both binaries import it; they don
 
 - **`/cratesplainer/`** — a deliberately-overexplained guide to using crate, useful when a new user lands on the daemon for the first time.
 
-Disk sites win conflicts: if you `crate push cratesplainer ./my-version`, your copy is served instead. `crate rm cratesplainer` removes your override and the built-in resurfaces.
+Disk sites win conflicts: if you `crate push ./my-version cratesplainer`, your copy is served instead. `crate rm cratesplainer` removes your override and the built-in resurfaces.
 
 ## Where data lives
 
@@ -108,7 +110,7 @@ task tidy       # go mod tidy
 
 ## Inspiration
 
-[ClawBox](https://github.com/openclaw/clawbox) — a plug-and-play appliance hosting an agent-facing service. crate-html is the same shape, specialized for HTML, and runs locally rather than as an appliance.
+ClawBox from OpenClaw — a plug-and-play appliance hosting an agent-facing service. crate-html is the same shape, specialized for HTML, and runs locally rather than as an appliance.
 
 ## License
 

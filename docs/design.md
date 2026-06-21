@@ -40,11 +40,11 @@ Both renames are within the same directory, so they're atomic on POSIX filesyste
 
 ## Bearer token from day 1
 
-Even though v0 binds `127.0.0.1` only, every `/api/*` endpoint requires a bearer token. On first run the daemon generates 32 random bytes (hex-encoded) and writes them to `config.yaml` with mode `0600`. The server checks tokens with `subtle.ConstantTimeCompare`.
+Even though v0 binds `127.0.0.1` only, every mutating `/api/sites/*` endpoint requires a bearer token. On first run the daemon generates 32 random bytes (hex-encoded) and writes them to `config.yaml` with mode `0600`. The server checks tokens with `subtle.ConstantTimeCompare`.
 
 Reason: if you ever expose the daemon (Caddy, tailnet, anything), retrofitting auth is a code change. Adding it now is a few lines and means the deployment story is "change one config field," not "rewrite the security model."
 
-Static serve paths (`/`, `/<site>/...`) require no auth — that's the whole point.
+`/api/status` is intentionally unauthenticated — `crate status` uses it as a liveness probe, and the Docker healthcheck does the same. Static serve paths (`/`, `/<site>/...`) are also public; that's the whole point.
 
 ## Env-var overrides on config
 
@@ -52,12 +52,13 @@ Static serve paths (`/`, `/<site>/...`) require no auth — that's the whole poi
 
 | Env var | Overrides |
 |---|---|
-| `CRATE_PORT` | `port` |
 | `CRATE_LISTEN_ADDR` | `listen_addr` |
 | `CRATE_BASE_URL` | `base_url` |
 | `CRATE_TOKEN` | `token` |
 
 Overrides stay process-local — the on-disk config isn't rewritten. The mechanism exists for one specific case: containers. Inside Docker, `crated` must bind `0.0.0.0:7777` for the port mapping to work; outside, it must bind `127.0.0.1`. An env-var override in the Dockerfile (`ENV CRATE_LISTEN_ADDR=0.0.0.0:7777`) handles this without needing two different config files.
+
+There's intentionally no `CRATE_PORT` — `port` only exists to compose the default `listen_addr`/`base_url` strings. Overriding it after defaults are applied wouldn't change anything reachable. To bind a different port, set `CRATE_LISTEN_ADDR` directly.
 
 ## Localhost-only binding
 
@@ -103,9 +104,10 @@ Putting site data under `XDG_DATA_HOME` (not `XDG_CACHE_HOME`) is deliberate —
 
 | Not in v0 | Why | Where it slots in |
 |---|---|---|
-| Docker | One binary, one daemon. No need. | Future: a Dockerfile if someone wants it. |
-| Caddy | Localhost HTTP is enough today. | Caddy reverse-proxies `crated` if you ever want TLS/vhosts. |
-| Tailscale | Laptop-only. | Bind to a tailscale interface; same binary. |
+| Caddy / nginx | Localhost HTTP is enough today. | A reverse proxy in front of `crated` (host or Docker) handles TLS, vhosts, IP-allowlisting. |
+| Tailscale | Laptop-only. | Bind `crated` to a tailscale interface; same binary. |
 | Database | Filesystem is enough. | Never, ideally. |
 | Multi-tenant auth | One human, one machine. | Per-token-scoped sites, if multi-user ever happens. |
 | Server-side rendering | Sites are static. | Render to static first, then push. |
+
+Docker support **is** shipped (Dockerfile + `task docker:*`) — see the README quickstart.
