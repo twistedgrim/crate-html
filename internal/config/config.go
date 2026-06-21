@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/adrg/xdg"
 	"gopkg.in/yaml.v3"
@@ -27,8 +26,12 @@ const (
 // Used primarily for containerized deployments where the on-disk config
 // can't carry deploy-specific values (notably ListenAddr, which must be
 // 0.0.0.0 inside a container even when the user wants 127.0.0.1 outside it).
+//
+// There is intentionally no CRATE_PORT — Port is only used to compose
+// default ListenAddr/BaseURL strings, and overriding it without also
+// overriding those would silently no-op. Set CRATE_LISTEN_ADDR (and
+// CRATE_BASE_URL if needed) directly.
 const (
-	EnvPort       = "CRATE_PORT"
 	EnvListenAddr = "CRATE_LISTEN_ADDR"
 	EnvBaseURL    = "CRATE_BASE_URL"
 	EnvToken      = "CRATE_TOKEN"
@@ -145,11 +148,6 @@ func applyDefaults(cfg *Config) {
 }
 
 func applyEnv(cfg *Config) {
-	if v := os.Getenv(EnvPort); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.Port = n
-		}
-	}
 	if v := os.Getenv(EnvListenAddr); v != "" {
 		cfg.ListenAddr = v
 	}

@@ -201,6 +201,26 @@ func TestReplaceFromTarRejectsBadName(t *testing.T) {
 	}
 }
 
+// TestReplaceFromTarAcceptsLeadingDots ensures the traversal guard doesn't
+// over-reject filenames that *start* with two dots (e.g. "..foo"). filepath.Clean
+// leaves those alone; only "..", "../...", and "/..." should be rejected.
+func TestReplaceFromTarAcceptsLeadingDots(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store := storage.New(root)
+
+	tarball := buildTar(t, map[string]string{
+		"index.html": "<h1>ok</h1>",
+		"..weirdname.txt": "fine",
+	})
+	if _, err := store.ReplaceFromTar("dots", bytes.NewReader(tarball)); err != nil {
+		t.Fatalf("ReplaceFromTar: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "dots", "..weirdname.txt")); err != nil {
+		t.Errorf("..weirdname.txt should have been extracted: %v", err)
+	}
+}
+
 func TestListStatDeleteExists(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -217,9 +237,9 @@ func TestListStatDeleteExists(t *testing.T) {
 
 	// Push two.
 	for _, name := range []string{"alpha", "beta"} {
-		t := buildTar(t, map[string]string{"index.html": name})
-		if _, err := store.ReplaceFromTar(name, bytes.NewReader(t)); err != nil {
-			panic(err)
+		data := buildTar(t, map[string]string{"index.html": name})
+		if _, err := store.ReplaceFromTar(name, bytes.NewReader(data)); err != nil {
+			t.Fatalf("push %s: %v", name, err)
 		}
 	}
 

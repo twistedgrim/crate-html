@@ -218,7 +218,11 @@ func extractTar(dst string, r io.Reader) error {
 			return fmt.Errorf("tar read: %w", err)
 		}
 		clean := filepath.Clean(hdr.Name)
-		if strings.HasPrefix(clean, "..") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "/../") {
+		// Reject the path if it escapes the destination root. filepath.Clean
+		// already resolves any embedded "/../"; we only need to make sure the
+		// cleaned path doesn't start at "..", "../...", or "/...". Names that
+		// merely *begin* with two dots (e.g. "..foo") are valid filenames.
+		if clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
 			return fmt.Errorf("%w: %s", ErrUnsafePath, hdr.Name)
 		}
 		target := filepath.Join(dst, clean)
