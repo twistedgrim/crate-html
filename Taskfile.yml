@@ -5,8 +5,10 @@ vars:
 
 tasks:
   default:
+    desc: List available tasks
+    silent: true
     cmds:
-      - task: build
+      - task --list
 
   tidy:
     desc: Resolve and tidy module dependencies
