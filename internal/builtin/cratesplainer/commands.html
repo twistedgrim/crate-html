@@ -11,7 +11,7 @@
 </nav>
 
 <h1>The Commands</h1>
-<p class="sub">There are five. I'll cover all of them. Don't worry if it takes a while.</p>
+<p class="sub">There are six. I'll cover all of them. Don't worry if it takes a while.</p>
 
 <h2><code>crate push</code></h2>
 
@@ -34,7 +34,7 @@ a "tar" is a Unix archive format from 1979. It stands for "tape archive." Becaus
 <p>"ls" comes from the Unix command "ls", which lists things. So this lists things. Specifically, sites.</p>
 
 <pre>$ crate ls
-welcome                    1 file    1735 bytes  2026-06-20 13:38
+welcome                    1 files   1735 bytes  2026-06-20 13:38
 overview                   6 files  21190 bytes  2026-06-20 13:42
 cratesplainer              4 files  12977 bytes  2026-06-20 13:55</pre>
 
@@ -70,6 +70,17 @@ on macOS this calls <code>open</code>. On Linux it calls <code>xdg-open</code>. 
 crated 0.1.0-dev  base=http://localhost:7777  sites=3</pre>
 
 <p>If you get a connection-refused error: the daemon is not up. Run <code>crated</code> in another terminal. There. You did it. I'm proud of you.</p>
+
+<h2><code>crate token</code></h2>
+
+<p>This prints the bearer token. Not the URL. Not the config. Just the token. One line. To standard output.</p>
+
+<pre>$ crate token
+374b48a038727f2581c6fdb77f63d267e5deca16a8d7f1426d837334d042ee76</pre>
+
+<div class="aside well">
+this exists because before it existed, retrieving the token meant running <code>cat ~/.config/crate/config.yaml | grep token | awk '{print $2}'</code>. Which, if you don't write shell every day, is a small archaeology dig. So now it's a subcommand. You're welcome.
+</div>
 
 <footer>Continue to <a href="./gotchas.html">the gotchas &rarr;</a> (this is where the real wisdom is)</footer>
 </html>

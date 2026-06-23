@@ -2,9 +2,11 @@
 
 Local HTML hosting for AI coding agents.
 
-An agent (Claude Code, Pi, anything that can shell out) generates a directory of static HTML, runs `crate push ./dir name`, and gets back `http://localhost:7777/name/`. The human opens that URL and sees the rendered artifact — a plan, an explainer, a code review — instead of skimming raw markdown in a chat window.
+An agent (Claude Code, [Pi the coding agent](https://pi.ai/), anything that can shell out) generates a directory of static HTML, runs `crate push ./dir name`, and gets back `http://localhost:7777/name/`. The human opens that URL and sees the rendered artifact — a plan, an explainer, a code review — instead of skimming raw markdown in a chat window.
 
-Status: **v0.1.0-dev** — laptop-only out of the box, optional Docker for persistence. Caddy/Tailscale are roadmap.
+> "Pi" throughout this repo means the Pi coding agent, not Raspberry Pi hardware.
+
+Status: **v0.1.0-dev** — laptop-only out of the box, optional Docker for persistence, optional Tailscale exposure via tsdproxy. Caddy / nginx in front of the daemon is roadmap.
 
 ## Quickstart
 
@@ -27,7 +29,7 @@ For a persistent daemon that survives terminal sessions:
 ```bash
 task docker:build       # build the crate-html image
 task docker:up          # start crated on :7777 with persistent volumes
-task docker:token       # print the daemon's full config from the volume (includes the token)
+task docker:token       # print just the bearer token (via `crate token` inside the container)
 task docker:logs        # tail the container's logs
 task docker:down        # stop the container (volumes preserved)
 ```
@@ -60,19 +62,21 @@ tsdproxy auto-provisions the Tailscale node and TLS cert. Full setup including p
 ## CLI
 
 ```
-crate push <dir> <name>     upload a directory as a site
+crate push <src> <name>     upload a directory, a pre-built tar file, or '-' (stdin tar)
+crate push <src> <name> -o  same as push, then open the URL in a browser
 crate ls                    list deployed sites
 crate rm <name>             remove a site
 crate open <name>           open the site in your default browser
 crate status                show daemon version and site count
+crate token                 print the bearer token from the loaded config
 ```
 
-Site names must match `^[a-z0-9][a-z0-9._-]{0,62}$`.
+Site names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. A global `--config <path>` flag (on both `crate` and `crated`) overrides the XDG config-file location.
 
 ## Layout
 
 ```
-cmd/crate/          CLI (kong) — push, ls, rm, open, status
+cmd/crate/          CLI (kong) — push, ls, rm, open, status, token
 cmd/crated/         HTTP daemon
 internal/wire/      request/response types — the API contract
 internal/config/    XDG config loader, first-run token generation
@@ -122,6 +126,7 @@ task tidy       # go mod tidy
 - [`docs/design.md`](docs/design.md) — *why* the architecture is shaped the way it is
 - [`docs/naming.md`](docs/naming.md) — naming rationale and availability check
 - [`docs/roadmap.md`](docs/roadmap.md) — near-term work and explicit non-goals
+- [`examples/`](examples/) — optional compose overrides (currently: tsdproxy on Tailscale)
 
 ## Inspiration
 

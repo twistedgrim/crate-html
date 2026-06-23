@@ -30,18 +30,18 @@ Two binaries, one Go module:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `PUT /api/sites/{name}` | Push a tar stream as a site (replaces existing) |
-| `DELETE /api/sites/{name}` | Remove a deployed site |
-| `GET /api/sites` | List all sites with metadata |
+| `PUT` | `/api/sites/{name}` | Push a tar stream as a site (replaces existing) |
+| `DELETE` | `/api/sites/{name}` | Remove a deployed site |
+| `GET` | `/api/sites` | List all sites with metadata |
 
 ### Public (no auth)
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET /api/status` | Liveness probe — version + site count |
-| `GET /` | HTML index linking to all sites (disk + built-in) |
-| `GET /<site>/` | Serve `<site>/index.html` |
-| `GET /<site>/<path>` | Serve a file under the site |
+| `GET` | `/api/status` | Liveness probe — version + site count |
+| `GET` | `/` | HTML index linking to all sites (disk + built-in) |
+| `GET` | `/<site>/` | Serve `<site>/index.html` |
+| `GET` | `/<site>/<path>` | Serve a file under the site |
 
 `/api/status` is deliberately unauthenticated so external healthchecks (Docker, reverse proxies, monitoring) can probe the daemon without holding a token.
 

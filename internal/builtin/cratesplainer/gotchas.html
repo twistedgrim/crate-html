@@ -18,7 +18,7 @@
 <p>The daemon &mdash; "crated", with a "d" at the end, which in Unix tradition means "daemon," which is, I should mention, a Greek word originally &mdash; has to actually be running for any of this to work.</p>
 
 <div class="aside">
-if you close the terminal you ran <code>crated</code> in, it stops. That's not a bug. That's how processes work. You may be thinking, "I'd like it to keep running." We'll get there. There's a thing called launchd. Don't worry about it yet.
+if you close the terminal you ran <code>crated</code> in, it stops. That's not a bug. That's how processes work. You may be thinking, "I'd like it to keep running." We've got you. There's <code>task docker:up</code>, which puts <code>crated</code> in a container with a persistent volume so it survives your terminal habits.
 </div>
 
 <h2>2. The site name is not the directory name</h2>
@@ -62,7 +62,7 @@ this is for security reasons. A symlink could point anywhere &mdash; <code>/etc/
 </ol>
 
 <div class="aside">
-if you genuinely need remote access, the answer is Caddy in front of the daemon. Or Tailscale. There's a roadmap. <a href="https://github.com/twistedgrim/crate-html/blob/main/docs/roadmap.md">It's right here</a>. I've thought about this more than you have.
+if you genuinely need remote access, the answer is Caddy in front of the daemon. Or Tailscale. There's a roadmap. <a href="https://github.com/Twistedgrim/crate-html/blob/main/docs/roadmap.md">It's right here</a>. I've thought about this more than you have.
 </div>
 
 <h2>6. The token is in your config file</h2>

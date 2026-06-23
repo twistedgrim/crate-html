@@ -76,16 +76,16 @@ tasks:
       - docker compose logs -f crated
 
   docker:token:
-    desc: Print the bearer token from the dockerized daemon's config volume
+    desc: Print just the bearer token from the dockerized daemon (via `crate token` inside the container)
     cmds:
-      - docker compose exec crated cat /config/crate/config.yaml
+      - docker compose exec -T crated crate token
 
   docker:env:
     desc: Print env-var exports to point the host CLI at the dockerized daemon. Use `eval $(task docker:env)`.
     silent: true
     cmds:
       - |
-        TOKEN=$(docker compose exec -T crated cat /config/crate/config.yaml | awk '/^token:/{print $2}')
+        TOKEN=$(docker compose exec -T crated crate token | tr -d '[:space:]')
         echo "export CRATE_TOKEN=$TOKEN"
         echo "export CRATE_BASE_URL=http://localhost:7777"
 
