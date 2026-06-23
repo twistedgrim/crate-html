@@ -12,7 +12,9 @@ Decisions on the binary name, the package/repo name, and the marketing domain. K
 
 Pattern: short binary + qualified package name. Mirrors `gh` binary / `cli` repo, `kubectl` binary / `kubernetes` package, `aws` binary / `awscli` package.
 
-## Availability check (2026-06-20)
+## Availability check
+
+Point-in-time snapshot as of **2026-06-20**. Re-verify before any public release if more than a couple of weeks have passed.
 
 | Slot | Status |
 |---|---|
@@ -43,11 +45,12 @@ Homebrew `crate` is the only clean slot. Hence the split: short binary on brew, 
 Verb-style subcommands (`git`/`docker` style):
 
 ```
-crate push ./dir name
+crate push <src> <name>   # src = dir | tar file | '-' (stdin tar)
 crate ls
-crate rm name
-crate open name
+crate rm <name>
+crate open <name>
 crate status
+crate token
 ```
 
-Reads naturally as commands. The noun-then-verb style (`crate site push name`) was on the table but adds a word per invocation with no payoff for a five-command surface.
+Reads naturally as commands. The noun-then-verb style (`crate site push name`) was on the table but adds a word per invocation with no payoff for a six-command surface.
