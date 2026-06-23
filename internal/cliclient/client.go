@@ -114,8 +114,14 @@ func (c *Client) Push(ctx context.Context, name, srcDir string) (wire.PutSiteRes
 		err := storage.WriteDirAsTar(srcDir, pw)
 		_ = pw.CloseWithError(err)
 	}()
+	return c.PushReader(ctx, name, pr)
+}
 
-	req, err := c.newReq(ctx, http.MethodPut, wire.PathAPISites+"/"+name, pr)
+// PushReader PUTs an already-formed tar stream as site `name`. Used for
+// `crate push - <name>` (stdin) and `crate push file.tar <name>` (pre-built
+// archive). Push() is the convenience wrapper that tars a directory first.
+func (c *Client) PushReader(ctx context.Context, name string, r io.Reader) (wire.PutSiteResponse, error) {
+	req, err := c.newReq(ctx, http.MethodPut, wire.PathAPISites+"/"+name, r)
 	if err != nil {
 		return wire.PutSiteResponse{}, err
 	}

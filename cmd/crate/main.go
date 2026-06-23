@@ -4,29 +4,65 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
 
 	"github.com/Twistedgrim/crate-html/internal/cliclient"
 	"github.com/Twistedgrim/crate-html/internal/config"
+	"github.com/Twistedgrim/crate-html/internal/wire"
 	"github.com/alecthomas/kong"
 )
 
 type pushCmd struct {
-	Dir  string `arg:"" help:"Local directory to upload." type:"existingdir"`
+	Src  string `arg:"" name:"src" help:"Directory to upload, path to a pre-built .tar, or '-' to read a tar from stdin."`
 	Name string `arg:"" help:"Site name (lowercase, dot/hyphen/underscore allowed)."`
+	Open bool   `help:"Open the published URL in a browser after a successful push." short:"o"`
 }
 
 func (c *pushCmd) Run(g *globals) error {
 	client := cliclient.New(g.cfg)
-	res, err := client.Push(context.Background(), c.Name, c.Dir)
+	ctx := context.Background()
+
+	res, err := c.push(ctx, client)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("pushed %s (%d files, %d bytes)\n", res.Site.Name, res.Site.FileCount, res.Site.SizeBytes)
 	fmt.Println(res.URL)
+	if c.Open {
+		if err := openBrowser(res.URL); err != nil {
+			return fmt.Errorf("open browser: %w", err)
+		}
+	}
 	return nil
+}
+
+func (c *pushCmd) push(ctx context.Context, client *cliclient.Client) (wire.PutSiteResponse, error) {
+	// "-" → stdin (the canonical agent-on-Docker-host path:
+	// `tar -C ./dir -cf - . | docker exec -i crated crate push - <name>`).
+	if c.Src == "-" {
+		return client.PushReader(ctx, c.Name, os.Stdin)
+	}
+
+	info, err := os.Stat(c.Src)
+	if err != nil {
+		return wire.PutSiteResponse{}, err
+	}
+	if info.IsDir() {
+		return client.Push(ctx, c.Name, c.Src)
+	}
+	if info.Mode().IsRegular() {
+		// Treat any regular file as a pre-built tar archive.
+		f, ferr := os.Open(c.Src)
+		if ferr != nil {
+			return wire.PutSiteResponse{}, ferr
+		}
+		defer f.Close()
+		return client.PushReader(ctx, c.Name, f)
+	}
+	return wire.PutSiteResponse{}, fmt.Errorf("source must be a directory, a regular file, or '-' (stdin); got %s", c.Src)
 }
 
 type lsCmd struct{}
@@ -83,12 +119,25 @@ func (c *statusCmd) Run(g *globals) error {
 	return nil
 }
 
+type tokenCmd struct{}
+
+func (c *tokenCmd) Run(g *globals) error {
+	if g.cfg.Token == "" {
+		return fmt.Errorf("no token set in config")
+	}
+	_, err := io.WriteString(os.Stdout, g.cfg.Token+"\n")
+	return err
+}
+
 type cli struct {
-	Push   pushCmd   `cmd:"" help:"Upload a directory as a site."`
+	Config string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
+
+	Push   pushCmd   `cmd:"" help:"Upload a directory, tar file, or stdin tar as a site."`
 	Ls     lsCmd     `cmd:"" help:"List deployed sites."`
 	Rm     rmCmd     `cmd:"" help:"Remove a site."`
 	Open   openCmd   `cmd:"" help:"Open a site in your browser."`
 	Status statusCmd `cmd:"" help:"Show daemon status."`
+	Token  tokenCmd  `cmd:"" help:"Print the bearer token from the loaded config."`
 }
 
 type globals struct {
@@ -108,6 +157,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "crate:", err)
 		os.Exit(1)
 	}
+	if root.Config != "" {
+		paths.ConfigFile = root.Config
+	}
 	cfg, err := config.LoadOrInit(paths)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "crate:", err)
@@ -122,6 +174,13 @@ func main() {
 }
 
 func openBrowser(url string) error {
+	// Honor BROWSER if set (POSIX convention; xdg-open already does this on
+	// Linux, we extend it cross-platform). Setting BROWSER=/usr/bin/true (or
+	// any no-op command) is the supported way for tests + headless scripts
+	// to suppress the actual browser pop.
+	if b := os.Getenv("BROWSER"); b != "" {
+		return exec.Command(b, url).Start()
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

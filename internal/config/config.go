@@ -111,10 +111,15 @@ func LoadOrInit(paths Paths) (Config, error) {
 }
 
 // Save writes cfg to disk with 0600 permissions (it contains a secret).
+// The parent directory is created if missing so callers can pass an explicit
+// --config path under a fresh directory without a separate mkdir step.
 func Save(paths Paths, cfg Config) error {
 	out, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o755); err != nil {
+		return fmt.Errorf("mkdir config dir: %w", err)
 	}
 	if err := os.WriteFile(paths.ConfigFile, out, 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)

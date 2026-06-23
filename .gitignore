@@ -5,6 +5,11 @@ bin/
 .env
 .envrc.local
 
+# Local-only scratch: feature drafts, working notes, anything you don't
+# want to commit but want under docs/ for parallel reading with the
+# real docs.
+docs/ignored/
+
 # Editor
 .vscode/*.log
 .idea/

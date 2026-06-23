@@ -16,19 +16,33 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/server"
 	"github.com/Twistedgrim/crate-html/internal/storage"
+	"github.com/alecthomas/kong"
 )
 
+type cli struct {
+	Config string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
+}
+
 func main() {
-	if err := run(); err != nil {
+	var root cli
+	kong.Parse(&root,
+		kong.Name("crated"),
+		kong.Description("crate-html HTTP daemon. Serves sites under $XDG_DATA_HOME/crate/sites/ and accepts uploads via /api/sites."),
+		kong.UsageOnError(),
+	)
+	if err := run(root); err != nil {
 		fmt.Fprintln(os.Stderr, "crated:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(root cli) error {
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return err
+	}
+	if root.Config != "" {
+		paths.ConfigFile = root.Config
 	}
 	cfg, err := config.LoadOrInit(paths)
 	if err != nil {
