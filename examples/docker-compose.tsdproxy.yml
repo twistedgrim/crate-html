@@ -1,0 +1,27 @@
+# Compose override that exposes the crated container via tsdproxy on your
+# Tailscale tailnet. Combine with the repo's main docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f examples/docker-compose.tsdproxy.yml up -d
+#
+# Or copy the labels into your own override file at the repo root:
+#
+#   cp examples/docker-compose.tsdproxy.yml docker-compose.override.yml
+#
+# Prerequisites:
+#   - tsdproxy running on the same Docker host. See https://github.com/almeidapaulopt/tsdproxy
+#   - Tailscale auth key configured for tsdproxy via authKeyFile in its
+#     config.yaml (not the TSPROXY_AUTH_KEY env var — see docs/deploy.md).
+#
+# Once tsdproxy picks up the labels, your site is served at:
+#   https://crate.<your-tailnet>.ts.net/
+#
+# Rename `tsdproxy.name` below if you want a different tailnet hostname.
+
+services:
+  crated:
+    labels:
+      tsdproxy.enable: "true"
+      tsdproxy.name: "crate"
+      # 443/https inbound (Tailscale terminates TLS), 7777/http upstream
+      # (crated speaks plain HTTP inside the container).
+      tsdproxy.port.1: "443/https:7777/http"

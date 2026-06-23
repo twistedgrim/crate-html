@@ -2,6 +2,8 @@
 
 Why crate-html looks the way it does. Each section is a decision we made and the rationale, so future changes can either honor it or argue with it.
 
+For *what* the system does (logical view, API surface, push/serve protocols, deployment topology) see [`architecture.md`](architecture.md). For deployment recipes (local, Docker, Docker + tsdproxy on Tailscale) see [`deploy.md`](deploy.md).
+
 ## Two binaries, one module
 
 `crate` (CLI) and `crated` (daemon) ship as separate binaries in one Go module.

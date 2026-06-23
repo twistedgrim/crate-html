@@ -17,8 +17,14 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
 ## Recently shipped
 
 - **Docker.** Multi-stage build, alpine runtime, named volumes for `/config` and `/data`, `task docker:{build,up,down,nuke,logs,token,env,shell}`, env-var overrides for in-container binding.
-- **Smoke harness.** `task smoke` runs `scripts/smoke.sh` against an isolated `crated` on port 17777, exercising every `testdata/sites/*` fixture plus the built-in cratesplainer, ls/rm, path-traversal block, and bearer-token enforcement.
-- **`internal/storage` unit tests.** Table-driven coverage of `ValidateName`, happy-path extraction, atomic overwrite without leaked stage/old dirs, traversal rejection, symlink stripping, and `WriteDirAsTar` → `ReplaceFromTar` round-trip.
+- **Go integration suite (`task smoke`).** ~30 tests under `tests/smoke/` (build tag `smoke`) covering lifecycle (status/ls/rm/push), bearer-token enforcement on each `/api/sites/*` verb, path-traversal rejection in URLs and tarballs, built-in cratesplainer serving + disk-shadowing, push variants (dir / stdin / pre-built tar / `--open`), `--config` flag, and `CRATE_TOKEN` env override. Replaces the original bash harness.
+- **Unit-test coverage** across `internal/`:
+  - `storage` (existing) — ValidateName, atomic replace, traversal, symlinks, write→read round-trip.
+  - `config` — applyDefaults/applyEnv, fresh init, env override doesn't rewrite file, Save MkdirAlls parent.
+  - `cliclient` — Push/PushReader/List/Delete/Status against `httptest.NewServer`, bearer attachment, error decoding.
+  - `server` — disk-vs-builtin routing, requireAuth on each verb, trailing-slash redirect, invalid name 404, builtin shadowing.
+  - `builtin` — every embedded site has `index.html`; cratesplainer assets reachable; broken-HTML regression guard.
+- **Tier-1 CLI ergonomics:** `crate token`, `crate push --open`, `crate push -` (stdin), `crate push <file.tar>`, `--config <path>` for both binaries, `examples/docker-compose.tsdproxy.yml`.
 
 ## Near-term
 
@@ -28,17 +34,9 @@ The Claude Code skill at `.claude/skills/crate-push/SKILL.md` is the template. T
 
 > "Pi" here means the Pi coding agent — a peer to Claude Code. There is no Raspberry Pi or embedded-hardware story.
 
-### `crate push --open`
-
-One flag to open the URL in a browser after a successful push. Same as `crate push` then `crate open`, with one fewer step.
-
 ### GitHub Actions CI
 
-Run `go test ./...`, `task smoke`, and `task docker:build` on every push so `main` stays green without needing James's laptop.
-
-### More unit-test coverage
-
-`internal/cliclient`, `internal/server`, and `internal/config` currently have no tests. Highest-leverage targets: server's `handlePublic` disk-vs-builtin routing, config's env-var overrides, and the CLI client's auth header.
+Run `go test ./...`, `task smoke`, and `task docker:build` on every push so `main` stays green without needing James's laptop. Tests already exist; CI is the wiring.
 
 ## Medium-term
 

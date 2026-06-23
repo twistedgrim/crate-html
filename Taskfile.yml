@@ -44,9 +44,9 @@ tasks:
       - "{{.BIN_DIR}}/crated"
 
   smoke:
-    desc: End-to-end smoke test against an isolated crated on port 17777
+    desc: End-to-end integration tests (builds binaries, starts an isolated crated on :17777, runs Go test suite under build tag `smoke`)
     cmds:
-      - ./scripts/smoke.sh
+      - go test -tags smoke -count=1 ./tests/smoke/...
 
   docker:build:
     desc: Build the crate-html Docker image

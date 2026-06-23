@@ -44,6 +44,19 @@ The env vars override anything in `config.yaml` for the lifetime of the shell. U
 
 `task docker:nuke` deletes the volumes too — use when you want a clean slate.
 
+### Tailscale (HTTPS on your tailnet)
+
+For a real hostname like `https://crate.<your-tailnet>.ts.net/`, add three [tsdproxy](https://github.com/almeidapaulopt/tsdproxy) labels to the `crated` service in `docker-compose.yml`:
+
+```yaml
+labels:
+  tsdproxy.enable: "true"
+  tsdproxy.name: "crate"
+  tsdproxy.port.1: "443/https:7777/http"
+```
+
+tsdproxy auto-provisions the Tailscale node and TLS cert. Full setup including prerequisites: [`docs/deploy.md`](docs/deploy.md).
+
 ## CLI
 
 ```
@@ -104,7 +117,9 @@ task tidy       # go mod tidy
 
 ## Docs
 
-- [`docs/design.md`](docs/design.md) — design decisions and what's deliberately out of v0
+- [`docs/architecture.md`](docs/architecture.md) — how it works end-to-end (logical view, API, push/serve protocols, deployment topology)
+- [`docs/deploy.md`](docs/deploy.md) — three deployment shapes (local, Docker, Docker + tsdproxy on Tailscale)
+- [`docs/design.md`](docs/design.md) — *why* the architecture is shaped the way it is
 - [`docs/naming.md`](docs/naming.md) — naming rationale and availability check
 - [`docs/roadmap.md`](docs/roadmap.md) — near-term work and explicit non-goals
 
