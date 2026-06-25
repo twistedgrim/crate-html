@@ -1,0 +1,116 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Cross-build crate + crated for each (platform, binary) combination and
+  # attach the archives to the GitHub Release. Runs only on the same workflow
+  # invocation that just created the release, so the tag is already pushed and
+  # GITHUB_TOKEN can upload assets to it.
+  release-binaries:
+    name: release-binaries
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Cross-build + archive
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          mkdir -p dist
+          LDFLAGS="-s -w -X github.com/Twistedgrim/crate-html/internal/server.Version=${TAG}"
+
+          build_one() {
+            local os=$1 arch=$2 bin=$3
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -trimpath -ldflags "$LDFLAGS" -o "dist/$bin" "./cmd/$bin"
+            local archive="${bin}_${VERSION}_${os}_${arch}.tar.gz"
+            (cd dist && tar -czf "$archive" "$bin" && rm "$bin")
+          }
+
+          for bin in crate crated; do
+            build_one darwin arm64 "$bin"
+            build_one darwin amd64 "$bin"
+            build_one linux  amd64 "$bin"
+            build_one linux  arm64 "$bin"
+          done
+
+          (cd dist && sha256sum crate_* crated_* > checksums.txt)
+          ls -la dist
+
+      - name: Attach binaries to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber
+
+  # Build a multi-arch crate-html image and push it to GHCR tagged with the
+  # release tag (and :latest). Uses GITHUB_TOKEN — no extra secrets required
+  # for a public repo.
+  release-image:
+    name: release-image
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@84ad562665bb303b549fec655d1b64f9945f3f91 # v6.15.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/twistedgrim/crate-html:${{ needs.release-please.outputs.tag_name }}
+            ghcr.io/twistedgrim/crate-html:latest

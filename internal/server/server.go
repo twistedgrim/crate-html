@@ -21,8 +21,13 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/wire"
 )
 
-// Version is the daemon version reported by /api/status.
-const Version = "0.1.0-dev"
+// Version is the daemon version reported by /api/status. It's a var, not a
+// const, so release builds can stamp it via ldflags:
+//
+//	go build -ldflags "-X github.com/Twistedgrim/crate-html/internal/server.Version=v0.2.0"
+//
+// The default value is what appears in dev builds and in `go install`.
+var Version = "0.1.0-dev"
 
 // Server bundles the HTTP handlers.
 type Server struct {

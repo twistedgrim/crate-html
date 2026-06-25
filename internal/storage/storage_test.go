@@ -31,16 +31,16 @@ func TestValidateName(t *testing.T) {
 
 		// invalid
 		{"", false},
-		{".hidden", false},   // can't start with dot
-		{"-leading", false},  // can't start with hyphen
-		{"_leading", false},  // can't start with underscore
-		{"/abs", false},      // slash
-		{"..", false},        // can't start with dot
-		{"UPPER", false},     // uppercase
-		{"sub/dir", false},   // slash
+		{".hidden", false},  // can't start with dot
+		{"-leading", false}, // can't start with hyphen
+		{"_leading", false}, // can't start with underscore
+		{"/abs", false},     // slash
+		{"..", false},       // can't start with dot
+		{"UPPER", false},    // uppercase
+		{"sub/dir", false},  // slash
 		{"with space", false},
 		{strings.Repeat("a", 64), false}, // one over the cap
-		{"eé", false},               // accented char
+		{"eé", false},                    // accented char
 		{".", false},
 	}
 
@@ -64,10 +64,10 @@ func TestReplaceFromTarHappyPath(t *testing.T) {
 	store := storage.New(root)
 
 	tarball := buildTar(t, map[string]string{
-		"index.html":     "<h1>hi</h1>",
-		"about.html":     "<p>about</p>",
-		"sub/page.html":  "<p>nested</p>",
-		"assets/x.css":   "body{}",
+		"index.html":    "<h1>hi</h1>",
+		"about.html":    "<p>about</p>",
+		"sub/page.html": "<p>nested</p>",
+		"assets/x.css":  "body{}",
 	})
 
 	site, err := store.ReplaceFromTar("mysite", bytes.NewReader(tarball))
@@ -210,7 +210,7 @@ func TestReplaceFromTarAcceptsLeadingDots(t *testing.T) {
 	store := storage.New(root)
 
 	tarball := buildTar(t, map[string]string{
-		"index.html": "<h1>ok</h1>",
+		"index.html":      "<h1>ok</h1>",
 		"..weirdname.txt": "fine",
 	})
 	if _, err := store.ReplaceFromTar("dots", bytes.NewReader(tarball)); err != nil {
