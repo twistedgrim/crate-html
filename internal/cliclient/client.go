@@ -109,23 +109,36 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 
 // Push tars srcDir and PUTs it as site `name`.
 func (c *Client) Push(ctx context.Context, name, srcDir string) (wire.PutSiteResponse, error) {
+	return c.PushWithExpiry(ctx, name, srcDir, "")
+}
+
+// PushWithExpiry tars srcDir and includes the requested expiry policy.
+func (c *Client) PushWithExpiry(ctx context.Context, name, srcDir, expiry string) (wire.PutSiteResponse, error) {
 	pr, pw := io.Pipe()
 	go func() {
 		err := storage.WriteDirAsTar(srcDir, pw)
 		_ = pw.CloseWithError(err)
 	}()
-	return c.PushReader(ctx, name, pr)
+	return c.PushReaderWithExpiry(ctx, name, pr, expiry)
 }
 
 // PushReader PUTs an already-formed tar stream as site `name`. Used for
 // `crate push - <name>` (stdin) and `crate push file.tar <name>` (pre-built
 // archive). Push() is the convenience wrapper that tars a directory first.
 func (c *Client) PushReader(ctx context.Context, name string, r io.Reader) (wire.PutSiteResponse, error) {
+	return c.PushReaderWithExpiry(ctx, name, r, "")
+}
+
+// PushReaderWithExpiry uploads a tar stream with an expiry duration or "never".
+func (c *Client) PushReaderWithExpiry(ctx context.Context, name string, r io.Reader, expiry string) (wire.PutSiteResponse, error) {
 	req, err := c.newReq(ctx, http.MethodPut, wire.PathAPISites+"/"+name, r)
 	if err != nil {
 		return wire.PutSiteResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-tar")
+	if expiry != "" {
+		req.Header.Set(wire.HeaderExpires, expiry)
+	}
 
 	resp, err := c.hc.Do(req)
 	if err != nil {

@@ -20,6 +20,8 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/wire"
 )
 
+const expiryDir = ".expiries"
+
 // ErrInvalidName is returned when a site name fails validation.
 var ErrInvalidName = errors.New("invalid site name")
 
@@ -87,7 +89,81 @@ func (s *Store) Delete(name string) error {
 	} else if err != nil {
 		return err
 	}
-	return os.RemoveAll(p)
+	if err := os.RemoveAll(p); err != nil {
+		return err
+	}
+	_ = os.Remove(s.expiryPath(name))
+	return nil
+}
+
+func (s *Store) expiryPath(name string) string {
+	return filepath.Join(s.root, expiryDir, name)
+}
+
+// SetExpiry records when a site should be removed. A nil time means the site
+// is retained indefinitely. Metadata is kept outside the publicly served tree.
+func (s *Store) SetExpiry(name string, expiresAt *time.Time) error {
+	if _, err := s.Path(name); err != nil {
+		return err
+	}
+	metadata := s.expiryPath(name)
+	if expiresAt == nil {
+		if err := os.Remove(metadata); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(metadata), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(metadata), ".expiry-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := io.WriteString(tmp, expiresAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, metadata)
+}
+
+func (s *Store) expiry(name string) (*time.Time, error) {
+	b, err := os.ReadFile(s.expiryPath(name))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(b)))
+	if err != nil {
+		return nil, fmt.Errorf("parse expiry for %s: %w", name, err)
+	}
+	return &t, nil
+}
+
+// DeleteExpired removes sites whose recorded deadline is at or before now.
+func (s *Store) DeleteExpired(now time.Time) ([]string, error) {
+	sites, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	var deleted []string
+	for _, site := range sites {
+		if site.ExpiresAt == nil || site.ExpiresAt.After(now) {
+			continue
+		}
+		if err := s.Delete(site.Name); err != nil && !errors.Is(err, ErrNotFound) {
+			return deleted, err
+		}
+		deleted = append(deleted, site.Name)
+	}
+	return deleted, nil
 }
 
 // List returns metadata for every site under root.
@@ -154,12 +230,17 @@ func (s *Store) Stat(name string) (wire.Site, error) {
 	if err != nil {
 		return wire.Site{}, err
 	}
+	expiresAt, err := s.expiry(name)
+	if err != nil {
+		return wire.Site{}, err
+	}
 
 	return wire.Site{
 		Name:      name,
 		UpdatedAt: updated,
 		SizeBytes: size,
 		FileCount: count,
+		ExpiresAt: expiresAt,
 	}, nil
 }
 

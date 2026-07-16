@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"github.com/Twistedgrim/crate-html/internal/cliclient"
 	"github.com/Twistedgrim/crate-html/internal/config"
@@ -16,9 +17,10 @@ import (
 )
 
 type pushCmd struct {
-	Src  string `arg:"" name:"src" help:"Directory to upload, path to a pre-built .tar, or '-' to read a tar from stdin."`
-	Name string `arg:"" help:"Site name (lowercase, dot/hyphen/underscore allowed)."`
-	Open bool   `help:"Open the published URL in a browser after a successful push." short:"o"`
+	Src     string `arg:"" name:"src" help:"Directory to upload, path to a pre-built .tar, or '-' to read a tar from stdin."`
+	Name    string `arg:"" help:"Site name (lowercase, dot/hyphen/underscore allowed)."`
+	Open    bool   `help:"Open the published URL in a browser after a successful push." short:"o"`
+	Expires string `help:"Expiry duration (default 24h), or 'never' to retain indefinitely." default:"24h" placeholder:"DURATION|never"`
 }
 
 func (c *pushCmd) Run(g *globals) error {
@@ -31,6 +33,11 @@ func (c *pushCmd) Run(g *globals) error {
 	}
 	fmt.Printf("pushed %s (%d files, %d bytes)\n", res.Site.Name, res.Site.FileCount, res.Site.SizeBytes)
 	fmt.Println(res.URL)
+	if res.Site.ExpiresAt == nil {
+		fmt.Println("expires never")
+	} else {
+		fmt.Println("expires", res.Site.ExpiresAt.Local().Format(time.RFC3339))
+	}
 	if c.Open {
 		if err := openBrowser(res.URL); err != nil {
 			return fmt.Errorf("open browser: %w", err)
@@ -43,7 +50,7 @@ func (c *pushCmd) push(ctx context.Context, client *cliclient.Client) (wire.PutS
 	// "-" → stdin (the canonical agent-on-Docker-host path:
 	// `tar -C ./dir -cf - . | docker exec -i crated crate push - <name>`).
 	if c.Src == "-" {
-		return client.PushReader(ctx, c.Name, os.Stdin)
+		return client.PushReaderWithExpiry(ctx, c.Name, os.Stdin, c.Expires)
 	}
 
 	info, err := os.Stat(c.Src)
@@ -51,7 +58,7 @@ func (c *pushCmd) push(ctx context.Context, client *cliclient.Client) (wire.PutS
 		return wire.PutSiteResponse{}, err
 	}
 	if info.IsDir() {
-		return client.Push(ctx, c.Name, c.Src)
+		return client.PushWithExpiry(ctx, c.Name, c.Src, c.Expires)
 	}
 	if info.Mode().IsRegular() {
 		// Treat any regular file as a pre-built tar archive.
@@ -60,7 +67,7 @@ func (c *pushCmd) push(ctx context.Context, client *cliclient.Client) (wire.PutS
 			return wire.PutSiteResponse{}, ferr
 		}
 		defer f.Close()
-		return client.PushReader(ctx, c.Name, f)
+		return client.PushReaderWithExpiry(ctx, c.Name, f, c.Expires)
 	}
 	return wire.PutSiteResponse{}, fmt.Errorf("source must be a directory, a regular file, or '-' (stdin); got %s", c.Src)
 }
@@ -78,8 +85,12 @@ func (c *lsCmd) Run(g *globals) error {
 		return nil
 	}
 	for _, s := range sites {
-		fmt.Printf("%-32s  %6d files  %10d bytes  %s\n",
-			s.Name, s.FileCount, s.SizeBytes, s.UpdatedAt.Format("2006-01-02 15:04"))
+		expires := "never"
+		if s.ExpiresAt != nil {
+			expires = s.ExpiresAt.Local().Format("2006-01-02 15:04")
+		}
+		fmt.Printf("%-32s  %6d files  %10d bytes  updated %s  expires %s\n",
+			s.Name, s.FileCount, s.SizeBytes, s.UpdatedAt.Format("2006-01-02 15:04"), expires)
 	}
 	return nil
 }

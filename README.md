@@ -62,8 +62,10 @@ tsdproxy auto-provisions the Tailscale node and TLS cert. Full setup including p
 ## CLI
 
 ```
-crate push <src> <name>     upload a directory, a pre-built tar file, or '-' (stdin tar)
-crate push <src> <name> -o  same as push, then open the URL in a browser
+crate push <src> <name>                       upload a site; expires after 24h by default
+crate push <src> <name> --expires 90m         set a custom lifetime
+crate push <src> <name> --expires never       retain the site indefinitely
+crate push <src> <name> -o                    push, then open the URL in a browser
 crate ls                    list deployed sites
 crate rm <name>             remove a site
 crate open <name>           open the site in your default browser
@@ -72,6 +74,8 @@ crate token                 print the bearer token from the loaded config
 ```
 
 Site names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. A global `--config <path>` flag (on both `crate` and `crated`) overrides the XDG config-file location.
+
+The daemon checks expiry deadlines once a minute and removes elapsed sites. Expiry metadata is stored separately from site assets, so it is not publicly served. Sites created by older versions without expiry metadata are retained indefinitely.
 
 ## Layout
 
