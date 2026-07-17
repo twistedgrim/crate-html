@@ -112,7 +112,7 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	expiresAt, err := parseExpiry(r.Header.Get(wire.HeaderExpires), time.Now())
+	expiry, err := parseExpiry(r.Header.Get(wire.HeaderExpires))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -120,7 +120,7 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	s.expiryMu.Lock()
 	defer s.expiryMu.Unlock()
 
-	site, err := s.store.ReplaceFromTar(name, r.Body)
+	site, err := s.store.ReplaceFromTarWithExpiry(name, r.Body, expiry)
 	if err != nil {
 		if errors.Is(err, storage.ErrUnsafePath) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -130,13 +130,6 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.store.SetExpiry(name, expiresAt); err != nil {
-		s.log.Printf("set expiry for %s: %v", name, err)
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	site.ExpiresAt = expiresAt
-
 	writeJSON(w, http.StatusOK, wire.PutSiteResponse{
 		Site: site,
 		URL:  s.cfg.BaseURL + "/" + name + "/",
@@ -151,7 +144,7 @@ func (s *Server) DeleteExpired(now time.Time) ([]string, error) {
 	return s.store.DeleteExpired(now)
 }
 
-func parseExpiry(value string, now time.Time) (*time.Time, error) {
+func parseExpiry(value string) (*time.Duration, error) {
 	if value == "never" {
 		return nil, nil
 	}
@@ -162,8 +155,7 @@ func parseExpiry(value string, now time.Time) (*time.Time, error) {
 	if err != nil || d <= 0 {
 		return nil, fmt.Errorf("invalid expiry %q: use a positive duration (for example 24h) or never", value)
 	}
-	t := now.Add(d)
-	return &t, nil
+	return &d, nil
 }
 
 func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {

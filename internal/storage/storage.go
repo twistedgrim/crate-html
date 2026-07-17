@@ -248,6 +248,25 @@ func (s *Store) Stat(name string) (wire.Site, error) {
 // atomically swaps it in as the site's directory. If extraction fails the
 // existing site is left untouched.
 func (s *Store) ReplaceFromTar(name string, r io.Reader) (wire.Site, error) {
+	return s.replaceFromTar(name, r, nil)
+}
+
+// ReplaceFromTarWithExpiry atomically replaces a site and records its expiry.
+// The duration is measured after the archive has been extracted, so slow
+// uploads receive their full requested lifetime. A nil duration retains the
+// site indefinitely.
+func (s *Store) ReplaceFromTarWithExpiry(name string, r io.Reader, expiry *time.Duration) (wire.Site, error) {
+	return s.replaceFromTar(name, r, func() error {
+		var expiresAt *time.Time
+		if expiry != nil {
+			t := time.Now().Add(*expiry)
+			expiresAt = &t
+		}
+		return s.SetExpiry(name, expiresAt)
+	})
+}
+
+func (s *Store) replaceFromTar(name string, r io.Reader, afterInstall func() error) (wire.Site, error) {
 	p, err := s.Path(name)
 	if err != nil {
 		return wire.Site{}, err
@@ -280,6 +299,15 @@ func (s *Store) ReplaceFromTar(name string, r io.Reader) (wire.Site, error) {
 		}
 		_ = os.RemoveAll(stage)
 		return wire.Site{}, fmt.Errorf("install site: %w", err)
+	}
+	if afterInstall != nil {
+		if err := afterInstall(); err != nil {
+			_ = os.RemoveAll(p)
+			if backup != "" {
+				_ = os.Rename(backup, p)
+			}
+			return wire.Site{}, fmt.Errorf("set expiry: %w", err)
+		}
 	}
 	if backup != "" {
 		_ = os.RemoveAll(backup)
