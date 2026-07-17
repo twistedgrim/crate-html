@@ -65,6 +65,7 @@ func run(root cli) error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	go watchExpiries(ctx, srv, logger, time.Minute)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -82,5 +83,29 @@ func run(root cli) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func watchExpiries(ctx context.Context, srv *server.Server, logger *log.Logger, interval time.Duration) {
+	remove := func() {
+		deleted, err := srv.DeleteExpired(time.Now())
+		if err != nil {
+			logger.Printf("expiry cleanup: %v", err)
+			return
+		}
+		for _, name := range deleted {
+			logger.Printf("expired site %s", name)
+		}
+	}
+	remove()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			remove()
+		}
 	}
 }

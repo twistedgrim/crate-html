@@ -73,7 +73,7 @@ A bare-bones Helm chart or kustomize overlay that runs `crated` behind a Gateway
 Open shape, not committed:
 
 - **Diff views.** When `crate push` overwrites an existing site, show what changed file-by-file.
-- **TTLs.** `crate push --expires 24h` for ephemeral drafts that self-clean.
+- **TTLs.** Shipped: pushes expire after 24h by default; `--expires <duration>` customizes the lifetime and `--expires never` opts out.
 - **Templates.** `crate new plan` scaffolds a starter site so agents don't have to generate boring chrome each time.
 - **Search across sites.** Full-text index of all deployed HTML so you can find that one page you pushed last week.
 

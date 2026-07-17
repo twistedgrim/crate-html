@@ -98,6 +98,13 @@ The CLI reads the same `config.yaml` by default, so local pushes work without an
 
 Sites are plain directories on disk. No database. `readdir` is the site index; `os.Rename` is the transaction.
 
+New pushes expire after 24 hours by default. `crate push --expires <duration>`
+sets another lifetime and `--expires never` opts out using the same flag. The
+CLI sends the policy in `X-Crate-Expires`; the daemon persists the absolute
+deadline under the private `.expiries` metadata directory and checks for elapsed
+sites once a minute. Sites without metadata, including sites from older
+versions, are retained indefinitely.
+
 | XDG var | Linux default | macOS default | Purpose |
 |---|---|---|---|
 | `XDG_CONFIG_HOME` | `~/.config` | `~/Library/Application Support` | `crate/config.yaml` (token, listen addr) |

@@ -6,6 +6,9 @@ import "time"
 // HeaderAuth is the bearer-token header name used on all /api endpoints.
 const HeaderAuth = "Authorization"
 
+// HeaderExpires carries either a Go duration (for example "24h") or "never".
+const HeaderExpires = "X-Crate-Expires"
+
 // Path constants for the daemon API.
 const (
 	PathAPISites  = "/api/sites"
@@ -14,10 +17,11 @@ const (
 
 // Site describes a deployed site.
 type Site struct {
-	Name      string    `json:"name"`
-	UpdatedAt time.Time `json:"updated_at"`
-	SizeBytes int64     `json:"size_bytes"`
-	FileCount int       `json:"file_count"`
+	Name      string     `json:"name"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	SizeBytes int64      `json:"size_bytes"`
+	FileCount int        `json:"file_count"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // ListSitesResponse is returned by GET /api/sites.

@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
@@ -261,6 +263,128 @@ func TestPutSiteHappyPath(t *testing.T) {
 	exists, _ := store.Exists("pushed")
 	if !exists {
 		t.Error("site not on disk after PUT")
+	}
+}
+
+func TestPutSiteExpiryPolicies(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		header     string
+		wantExpiry bool
+		minTTL     time.Duration
+		maxTTL     time.Duration
+	}{
+		{name: "default", wantExpiry: true, minTTL: 23*time.Hour + 59*time.Minute, maxTTL: 24*time.Hour + time.Minute},
+		{name: "custom", header: "90m", wantExpiry: true, minTTL: 89 * time.Minute, maxTTL: 91 * time.Minute},
+		{name: "never", header: "never", wantExpiry: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, store := newTestServer(t, nil)
+			var tarbuf bytes.Buffer
+			tw := tar.NewWriter(&tarbuf)
+			_ = tw.WriteHeader(&tar.Header{Name: "index.html", Mode: 0o644, Size: 2})
+			_, _ = tw.Write([]byte("ok"))
+			_ = tw.Close()
+			req, _ := http.NewRequest(http.MethodPut, ts.URL+wire.PathAPISites+"/expiry", &tarbuf)
+			req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+			if tc.header != "" {
+				req.Header.Set(wire.HeaderExpires, tc.header)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status %d: %s", resp.StatusCode, body)
+			}
+			site, err := store.Stat("expiry")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.wantExpiry {
+				if site.ExpiresAt != nil {
+					t.Fatalf("expires_at: got %v, want nil", site.ExpiresAt)
+				}
+				return
+			}
+			if site.ExpiresAt == nil {
+				t.Fatal("expires_at is nil")
+			}
+			ttl := time.Until(*site.ExpiresAt)
+			if ttl < tc.minTTL || ttl > tc.maxTTL {
+				t.Fatalf("ttl %v outside [%v, %v]", ttl, tc.minTTL, tc.maxTTL)
+			}
+		})
+	}
+}
+
+func TestPutSiteDoesNotReplaceOnExpiryFailure(t *testing.T) {
+	ts, store := newTestServer(t, nil)
+	var oldTar bytes.Buffer
+	oldWriter := tar.NewWriter(&oldTar)
+	_ = oldWriter.WriteHeader(&tar.Header{Name: "index.html", Mode: 0o644, Size: 3})
+	_, _ = oldWriter.Write([]byte("old"))
+	_ = oldWriter.Close()
+	oldReq, _ := http.NewRequest(http.MethodPut, ts.URL+wire.PathAPISites+"/atomic", &oldTar)
+	oldReq.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+	oldResp, err := http.DefaultClient.Do(oldReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldResp.Body.Close()
+	if oldResp.StatusCode != http.StatusOK {
+		t.Fatalf("initial put status: got %d, want %d", oldResp.StatusCode, http.StatusOK)
+	}
+	expiryRoot := filepath.Join(store.Root(), ".expiries")
+	if err := os.RemoveAll(expiryRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(expiryRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var tarbuf bytes.Buffer
+	tw := tar.NewWriter(&tarbuf)
+	_ = tw.WriteHeader(&tar.Header{Name: "index.html", Mode: 0o644, Size: 3})
+	_, _ = tw.Write([]byte("new"))
+	_ = tw.Close()
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+wire.PathAPISites+"/atomic", &tarbuf)
+	req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want %d", resp.StatusCode, http.StatusInternalServerError)
+	}
+
+	b, err := os.ReadFile(filepath.Join(store.Root(), "atomic", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b); got != "old" {
+		t.Fatalf("site content: got %q, want %q", got, "old")
+	}
+}
+
+func TestPutSiteRejectsInvalidExpiryBeforeUpload(t *testing.T) {
+	ts, store := newTestServer(t, nil)
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+wire.PathAPISites+"/invalid-expiry", bytes.NewReader(nil))
+	req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+	req.Header.Set(wire.HeaderExpires, "tomorrow")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400", resp.StatusCode)
+	}
+	if exists, _ := store.Exists("invalid-expiry"); exists {
+		t.Error("invalid expiry created a site")
 	}
 }
 

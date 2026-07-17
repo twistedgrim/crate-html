@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
@@ -29,12 +31,15 @@ import (
 // The default value is what appears in dev builds and in `go install`.
 var Version = "0.1.0-dev"
 
+const defaultExpiry = 24 * time.Hour
+
 // Server bundles the HTTP handlers.
 type Server struct {
 	store    *storage.Store
 	cfg      config.Config
 	log      *log.Logger
 	builtins []builtin.Site
+	expiryMu sync.Mutex
 }
 
 // New returns a Server. Pass nil for builtins to skip embedded sites.
@@ -107,7 +112,15 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	site, err := s.store.ReplaceFromTar(name, r.Body)
+	expiry, err := parseExpiry(r.Header.Get(wire.HeaderExpires))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.expiryMu.Lock()
+	defer s.expiryMu.Unlock()
+
+	site, err := s.store.ReplaceFromTarWithExpiry(name, r.Body, expiry)
 	if err != nil {
 		if errors.Is(err, storage.ErrUnsafePath) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -117,11 +130,32 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, wire.PutSiteResponse{
 		Site: site,
 		URL:  s.cfg.BaseURL + "/" + name + "/",
 	})
+}
+
+// DeleteExpired serializes broker cleanup with uploads so a replacement and
+// its new deadline cannot be split by the cleanup pass.
+func (s *Server) DeleteExpired(now time.Time) ([]string, error) {
+	s.expiryMu.Lock()
+	defer s.expiryMu.Unlock()
+	return s.store.DeleteExpired(now)
+}
+
+func parseExpiry(value string) (*time.Duration, error) {
+	if value == "never" {
+		return nil, nil
+	}
+	if value == "" {
+		value = defaultExpiry.String()
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return nil, fmt.Errorf("invalid expiry %q: use a positive duration (for example 24h) or never", value)
+	}
+	return &d, nil
 }
 
 func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {

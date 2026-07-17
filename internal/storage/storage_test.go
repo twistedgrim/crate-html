@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Twistedgrim/crate-html/internal/storage"
 )
@@ -278,6 +279,61 @@ func TestListStatDeleteExists(t *testing.T) {
 	sites, _ = store.List()
 	if len(sites) != 1 || sites[0].Name != "beta" {
 		t.Errorf("after delete: got %+v", sites)
+	}
+}
+
+func TestExpiryMetadataAndCleanup(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	store := storage.New(root)
+	data := buildTar(t, map[string]string{"index.html": "hello"})
+	if _, err := store.ReplaceFromTar("temporary", bytes.NewReader(data)); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := time.Now().Add(-time.Minute).UTC()
+	if err := store.SetExpiry("temporary", &expiresAt); err != nil {
+		t.Fatal(err)
+	}
+
+	site, err := store.Stat("temporary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.ExpiresAt == nil || !site.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("expiry: got %v, want %v", site.ExpiresAt, expiresAt)
+	}
+	if _, err := os.Stat(filepath.Join(root, "temporary", ".crate-expiry")); !errors.Is(err, fs.ErrNotExist) {
+		t.Error("expiry metadata must not be stored in the served site")
+	}
+
+	deleted, err := store.DeleteExpired(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 1 || deleted[0] != "temporary" {
+		t.Fatalf("deleted: got %v", deleted)
+	}
+	if ok, _ := store.Exists("temporary"); ok {
+		t.Error("expired site still exists")
+	}
+}
+
+func TestNeverExpiryIsNotCleanedUp(t *testing.T) {
+	t.Parallel()
+	store := storage.New(t.TempDir())
+	data := buildTar(t, map[string]string{"index.html": "hello"})
+	if _, err := store.ReplaceFromTar("permanent", bytes.NewReader(data)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetExpiry("permanent", nil); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteExpired(time.Now().Add(100 * 365 * 24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 0 {
+		t.Fatalf("permanent site was deleted: %v", deleted)
 	}
 }
 
