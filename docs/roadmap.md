@@ -25,6 +25,8 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
   - `server` — disk-vs-builtin routing, requireAuth on each verb, trailing-slash redirect, invalid name 404, builtin shadowing.
   - `builtin` — every embedded site has `index.html`; cratesplainer assets reachable; broken-HTML regression guard.
 - **Tier-1 CLI ergonomics:** `crate token`, `crate push --open`, `crate push -` (stdin), `crate push <file.tar>`, `--config <path>` for both binaries, `examples/docker-compose.tsdproxy.yml`.
+- **GitHub Actions CI + release-please.** `.github/workflows/ci.yml` runs `go test -race ./...`, `task smoke`, `task docker:build`, and hadolint on every push + PR. `.github/workflows/release-please.yml` opens the release PR from conventional commits; merging it cuts the tag, cross-builds `crate` + `crated` for darwin/{arm64,amd64} + linux/{amd64,arm64}, attaches archives to the GitHub Release, and pushes a multi-arch image to `ghcr.io/twistedgrim/crate-html`.
+- **Site expiry** (PR #7). `crate push` defaults to 24h; `--expires <duration>` or `--expires never` overrides. Wire header `X-Crate-Expires`; server persists deadlines under a private `.expiries/` metadata dir and reaps elapsed sites once per minute.
 
 ## Near-term
 
@@ -33,10 +35,6 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
 The Claude Code skill at `.claude/skills/crate-push/SKILL.md` is the template. The Pi-side equivalent is the same shape — a manifest that wraps `crate push`. Same API, different agent.
 
 > "Pi" here means the Pi coding agent — a peer to Claude Code. There is no Raspberry Pi or embedded-hardware story.
-
-### GitHub Actions CI
-
-Run `go test ./...`, `task smoke`, and `task docker:build` on every push so `main` stays green without needing James's laptop. Tests already exist; CI is the wiring.
 
 ## Medium-term
 
@@ -68,12 +66,32 @@ Ship `crate` via a personal Homebrew tap before submitting to homebrew-core. Low
 
 A bare-bones Helm chart or kustomize overlay that runs `crated` behind a Gateway-API HTTPRoute. Far-end option for anyone who wants to host crate-html as real infrastructure.
 
+## Aspirational
+
+**Nothing in this section is on a schedule.** These are ideas we like and might pursue as time and appetite allow. Track record: some aspirational items graduate to shipped (site expiry, Docker), some sit for a long time, some quietly get dropped. Don't wait for any of them.
+
+### CLI ergonomics
+
+- **`crate ls --urls`** — print each site's full URL (`BaseURL` + `/name/`) so the output is one copy-paste away from a browser tab. Especially useful on tsdproxy where the tailnet hostname isn't in local muscle memory.
+- **`crate stat <name>`** — single-site metadata (size, files, `expires_at`, `updated_at`). The wire type already carries everything; this is just a per-site CLI accessor rather than filtering `crate ls`.
+- **`crate mv old new`** — atomic rename via `os.Rename` in the sites root. Cheap; replaces the current `push` + `rm` dance for "I typo'd the name."
+- **`crate watch <dir> <name>`** — filesystem watcher that auto-pushes on change. Debounced. Useful for the "human edits HTML in an editor while an agent watches" and "agent iterates on generated HTML" loops.
+
+### Daemon / observability
+
+- **Structured JSON logs** (`--log-format=json` and `CRATE_LOG_FORMAT`). Switch `crated`'s logger to `log/slog` and add request-log middleware. Feeds cleanly into any log aggregator. A local WIP branch exists.
+- **`/metrics` Prometheus endpoint** — site count, push success/fail counters, request-latency histogram. Public like `/api/status`. Gate behind `--metrics` if we want to keep the base binary lean.
+
+### Speculative
+
+- **`crate import --from-url`** — pull a remote tarball directly and push it, skipping the local stage. CLI-side implementation to avoid the SSRF surface a server-side fetch would open.
+- **`crate doctor`** — sanity check for first-run setup (daemon up, token retrievable, XDG paths writable, tsdproxy hostname resolves). Shortens the "why doesn't this work" loop for new users.
+
 ## Far future
 
-Open shape, not committed:
+Not yet aspirational — closer to notebook margins. Open shape, not committed:
 
 - **Diff views.** When `crate push` overwrites an existing site, show what changed file-by-file.
-- **TTLs.** Shipped: pushes expire after 24h by default; `--expires <duration>` customizes the lifetime and `--expires never` opts out.
 - **Templates.** `crate new plan` scaffolds a starter site so agents don't have to generate boring chrome each time.
 - **Search across sites.** Full-text index of all deployed HTML so you can find that one page you pushed last week.
 
