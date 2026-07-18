@@ -129,6 +129,7 @@ task tidy       # go mod tidy
 - [`docs/deploy.md`](docs/deploy.md) — three deployment shapes (local, Docker, Docker + tsdproxy on Tailscale)
 - [`docs/design.md`](docs/design.md) — *why* the architecture is shaped the way it is
 - [`docs/naming.md`](docs/naming.md) — naming rationale and availability check
+- [`docs/releases.md`](docs/releases.md) — Conventional Commit and Release Please workflow
 - [`docs/roadmap.md`](docs/roadmap.md) — near-term work and explicit non-goals
 - [`examples/`](examples/) — optional compose overrides (currently: tsdproxy on Tailscale)
 

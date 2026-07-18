@@ -1,0 +1,32 @@
+name: Conventional PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate-title:
+    name: validate title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Require a Conventional Commit title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash scripts/hooks/commit-msg.sh --message "$PR_TITLE"
+
+  validate-commits:
+    name: validate commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Fetch the base branch
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+      - name: Require Conventional Commit subjects
+        run: bash scripts/hooks/check-pr-commits.sh "origin/${{ github.base_ref }}" HEAD

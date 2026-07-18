@@ -22,6 +22,16 @@ tasks:
       - go build -o {{.BIN_DIR}}/crate ./cmd/crate
       - go build -o {{.BIN_DIR}}/crated ./cmd/crated
 
+  hooks:install:
+    desc: Install local Lefthook safeguards (format, lint, Conventional Commits)
+    cmds:
+      - lefthook install
+
+  hooks:run:
+    desc: Run all configured local Lefthook checks
+    cmds:
+      - lefthook run pre-commit
+
   test:
     desc: Run all tests
     cmds:

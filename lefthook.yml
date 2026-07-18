@@ -1,0 +1,26 @@
+# Install once after cloning: task hooks:install
+# CI remains the authoritative merge gate; these hooks provide local feedback.
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: gofmt -w {staged_files}
+      stage_fixed: true
+    go-vet:
+      glob: "*.go"
+      run: go vet ./...
+    hadolint:
+      glob: "Dockerfile"
+      run: hadolint {staged_files}
+    markdownlint:
+      glob: "*.md"
+      run: markdownlint {staged_files}
+    actionlint:
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: actionlint {staged_files}
+
+commit-msg:
+  commands:
+    conventional:
+      run: bash scripts/hooks/commit-msg.sh {1}
