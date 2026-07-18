@@ -31,6 +31,20 @@ Use squash merge for feature work and keep the PR title unchanged as the
 squash-commit subject. GitHub uses that title for the commit on `main`; losing
 the `feat:` or `fix:` prefix means Release Please will not include the change.
 
+## Local feedback
+
+Install the optional local safeguards after cloning:
+
+```bash
+task hooks:install
+```
+
+Lefthook validates commit subjects with the same Conventional Commit script
+that CI uses for both PR titles and every PR commit. It also runs Go
+formatting/vetting plus Markdown, Dockerfile, and GitHub Actions linting for
+affected files. Install `hadolint`, `markdownlint`, and `actionlint` when
+working on those file types; CI remains the merge authority.
+
 ## Flow
 
 1. A release-bearing squash commit lands on `main`.

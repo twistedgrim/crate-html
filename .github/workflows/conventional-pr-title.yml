@@ -8,19 +8,25 @@ permissions:
   pull-requests: read
 
 jobs:
-  validate:
+  validate-title:
     name: validate title
     runs-on: ubuntu-latest
-    env:
-      TITLE: ${{ github.event.pull_request.title }}
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Require a Conventional Commit title
-        shell: bash
-        run: |
-          pattern='^(feat|fix|docs|chore|ci|refactor|test|build|perf|revert)(\([[:alnum:]./_-]+\))?!?: .+'
-          if [[ "$TITLE" =~ $pattern ]]; then
-            exit 0
-          fi
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash scripts/hooks/commit-msg.sh --message "$PR_TITLE"
 
-          echo "::error::PR title must use Conventional Commit syntax, for example: feat: add default site expiry"
-          exit 1
+  validate-commits:
+    name: validate commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Fetch the base branch
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+      - name: Require Conventional Commit subjects
+        run: bash scripts/hooks/check-pr-commits.sh "origin/${{ github.base_ref }}" HEAD
