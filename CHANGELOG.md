@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/twistedgrim/crate-html/compare/v0.1.0...v0.1.1) (2026-07-18)
+
+
+### Features
+
+* add default site expiry ([#9](https://github.com/twistedgrim/crate-html/issues/9)) ([c39cbef](https://github.com/twistedgrim/crate-html/commit/c39cbef2a2147af6061238733ffdddceb9c6d884))
+
 ## 0.1.0 (2026-06-25)
 
 
