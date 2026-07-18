@@ -1,0 +1,26 @@
+name: Conventional PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate:
+    name: validate title
+    runs-on: ubuntu-latest
+    env:
+      TITLE: ${{ github.event.pull_request.title }}
+    steps:
+      - name: Require a Conventional Commit title
+        shell: bash
+        run: |
+          pattern='^(feat|fix|docs|chore|ci|refactor|test|build|perf|revert)(\([[:alnum:]./_-]+\))?!?: .+'
+          if [[ "$TITLE" =~ $pattern ]]; then
+            exit 0
+          fi
+
+          echo "::error::PR title must use Conventional Commit syntax, for example: feat: add default site expiry"
+          exit 1
