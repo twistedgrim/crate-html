@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2](https://github.com/twistedgrim/crate-html/compare/v0.1.1...v0.1.2) (2026-07-20)
+
+
+### Features
+
+* named API tokens with root-only management ([#11](https://github.com/twistedgrim/crate-html/issues/11)) ([fb0b913](https://github.com/twistedgrim/crate-html/commit/fb0b9136b9964b62de7fedd187173aedefe63983))
+* **server:** richer, grouped, pluggable site index ([#12](https://github.com/twistedgrim/crate-html/issues/12)) ([b0543a0](https://github.com/twistedgrim/crate-html/commit/b0543a0705e97f4f5265bd402897bfb1d30d9d3b))
+
 ## [0.1.1](https://github.com/twistedgrim/crate-html/compare/v0.1.0...v0.1.1) (2026-07-18)
 
 
