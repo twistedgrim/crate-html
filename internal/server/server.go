@@ -252,13 +252,18 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 	// name, but one or more disk sites are dot-namespaced under it
 	// (name.child). An exact site/builtin always wins over this, so pushing a
 	// real "myproject" site shadows the synthetic group index.
-	if children, ok := s.groupChildren(name); ok {
+	//
+	// This is on the 404 hot path (every unknown path, e.g. /favicon.ico,
+	// lands here), so only a cheap name scan runs now — the full metadata
+	// List() is deferred to renderGroupIndex, which fires solely on an actual
+	// group-index render.
+	if s.hasGroupChildren(name) {
 		if len(parts) == 1 {
 			http.Redirect(w, r, "/"+name+"/", http.StatusFound)
 			return
 		}
 		if parts[1] == "" {
-			s.renderGroupIndex(w, name, children)
+			s.renderGroupIndex(w, r, name)
 			return
 		}
 	}
@@ -266,21 +271,21 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// groupChildren returns the disk sites dot-namespaced under prefix
-// (prefix.child) and whether there are any. It excludes a site named exactly
-// prefix — that is an exact match handled before this is reached.
-func (s *Server) groupChildren(prefix string) ([]wire.Site, bool) {
-	sites, err := s.store.List()
+// hasGroupChildren reports whether any disk site is dot-namespaced under
+// prefix (prefix.child), using a name-only scan (no per-site stat). A site
+// named exactly prefix is not a child — that is an exact match resolved
+// before this is reached.
+func (s *Server) hasGroupChildren(prefix string) bool {
+	names, err := s.store.Names()
 	if err != nil {
-		return nil, false
+		return false
 	}
-	var out []wire.Site
-	for _, site := range sites {
-		if strings.HasPrefix(site.Name, prefix+".") {
-			out = append(out, site)
+	for _, name := range names {
+		if strings.HasPrefix(name, prefix+".") {
+			return true
 		}
 	}
-	return out, len(out) > 0
+	return false
 }
 
 func (s *Server) serveDisk(w http.ResponseWriter, r *http.Request, name string, parts []string) {
@@ -392,11 +397,23 @@ func (s *Server) renderIndex(w http.ResponseWriter, _ *http.Request) {
 }
 
 // renderGroupIndex serves the synthetic /<prefix>/ page listing the disk sites
-// namespaced under prefix. children is guaranteed non-empty by the caller.
-func (s *Server) renderGroupIndex(w http.ResponseWriter, prefix string, children []wire.Site) {
-	rows := make([]siteRow, 0, len(children))
-	for _, site := range children {
-		rows = append(rows, diskRow(site, strings.TrimPrefix(site.Name, prefix+".")))
+// namespaced under prefix. The caller has confirmed (cheaply) that at least
+// one child exists; this is where the full metadata scan happens.
+func (s *Server) renderGroupIndex(w http.ResponseWriter, r *http.Request, prefix string) {
+	sites, err := s.store.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rows := make([]siteRow, 0)
+	for _, site := range sites {
+		if strings.HasPrefix(site.Name, prefix+".") {
+			rows = append(rows, diskRow(site, strings.TrimPrefix(site.Name, prefix+".")))
+		}
+	}
+	if len(rows) == 0 {
+		http.NotFound(w, r) // race: children vanished between check and render
+		return
 	}
 	s.executeIndex(w, indexView{
 		Title:  prefix,
