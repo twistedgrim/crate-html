@@ -5,14 +5,17 @@ package server
 
 import (
 	"crypto/subtle"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"html/template"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -24,6 +27,14 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/token"
 	"github.com/Twistedgrim/crate-html/internal/wire"
 )
+
+//go:embed index.tmpl
+var indexTmplSrc string
+
+// defaultIndexTmpl is the embedded index template, parsed once at init. A
+// custom operator-supplied template (config.IndexTemplate) replaces it per
+// Server; the embedded one is the fallback.
+var defaultIndexTmpl = template.Must(template.New("index").Parse(indexTmplSrc))
 
 // Version is the daemon version reported by /api/status. It's a var, not a
 // const, so release builds can stamp it via ldflags:
@@ -37,12 +48,13 @@ const defaultExpiry = 24 * time.Hour
 
 // Server bundles the HTTP handlers.
 type Server struct {
-	store    *storage.Store
-	tokens   *token.Store
-	cfg      config.Config
-	log      *log.Logger
-	builtins []builtin.Site
-	expiryMu sync.Mutex
+	store     *storage.Store
+	tokens    *token.Store
+	cfg       config.Config
+	log       *log.Logger
+	builtins  []builtin.Site
+	indexTmpl *template.Template
+	expiryMu  sync.Mutex
 }
 
 // New returns a Server. Pass nil for builtins to skip embedded sites and nil
@@ -51,7 +63,32 @@ func New(cfg config.Config, store *storage.Store, tokens *token.Store, builtins 
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Server{store: store, tokens: tokens, cfg: cfg, log: logger, builtins: builtins}
+	return &Server{store: store, tokens: tokens, cfg: cfg, log: logger, builtins: builtins, indexTmpl: defaultIndexTmpl}
+	return &Server{store: store, cfg: cfg, log: logger, builtins: builtins, indexTmpl: defaultIndexTmpl}
+}
+
+// UseIndexTemplateFile parses path and uses it for the root/group index
+// instead of the embedded default. It is operator-controlled (config +
+// filesystem access), deliberately not a pushed-site mechanism, so it may
+// contain template logic the embedded default does not. Returns an error if
+// the file cannot be read or parsed, so callers can fail fast at startup.
+//
+// The template is executed with an indexView (see renderIndexView): a struct
+// of {Title string, Group bool, Empty bool, Groups []siteGroup}, where each
+// siteGroup is {Name, Href string, Grouped bool, Rows []siteRow} and each
+// siteRow is {Name, Label, Href string, Builtin bool, FileCount int,
+// SizeHuman, UpdatedRel, UpdatedAbs, ExpiryLabel string}.
+func (s *Server) UseIndexTemplateFile(path string) error {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read index template %q: %w", path, err)
+	}
+	t, err := template.New("index").Parse(string(src))
+	if err != nil {
+		return fmt.Errorf("parse index template %q: %w", path, err)
+	}
+	s.indexTmpl = t
+	return nil
 }
 
 // Handler returns the root http.Handler for the daemon.
@@ -359,7 +396,39 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Then a synthetic per-project index: no exact site or builtin owns this
+	// name, but one or more disk sites are dot-namespaced under it
+	// (name.child). An exact site/builtin always wins over this, so pushing a
+	// real "myproject" site shadows the synthetic group index.
+	if children, ok := s.groupChildren(name); ok {
+		if len(parts) == 1 {
+			http.Redirect(w, r, "/"+name+"/", http.StatusFound)
+			return
+		}
+		if parts[1] == "" {
+			s.renderGroupIndex(w, name, children)
+			return
+		}
+	}
+
 	http.NotFound(w, r)
+}
+
+// groupChildren returns the disk sites dot-namespaced under prefix
+// (prefix.child) and whether there are any. It excludes a site named exactly
+// prefix — that is an exact match handled before this is reached.
+func (s *Server) groupChildren(prefix string) ([]wire.Site, bool) {
+	sites, err := s.store.List()
+	if err != nil {
+		return nil, false
+	}
+	var out []wire.Site
+	for _, site := range sites {
+		if strings.HasPrefix(site.Name, prefix+".") {
+			out = append(out, site)
+		}
+	}
+	return out, len(out) > 0
 }
 
 func (s *Server) serveDisk(w http.ResponseWriter, r *http.Request, name string, parts []string) {
@@ -402,6 +471,39 @@ func (s *Server) findBuiltin(name string) (builtin.Site, bool) {
 	return builtin.Site{}, false
 }
 
+// indexView is the data the index template is executed with. It is documented
+// on UseIndexTemplateFile because custom templates depend on this shape.
+type indexView struct {
+	Title  string
+	Group  bool
+	Empty  bool
+	Groups []siteGroup
+}
+
+// siteGroup is a header + rows on the index. Grouped false means a bare row
+// with no header (an ungrouped, non-namespaced site or a builtin).
+type siteGroup struct {
+	Name    string
+	Href    string
+	Grouped bool
+	Rows    []siteRow
+}
+
+// siteRow is one site on the index. Label is the link text (the child suffix
+// inside a group, else the full name); Name is always the full site name and
+// appears in the link title.
+type siteRow struct {
+	Name        string
+	Label       string
+	Href        string
+	Builtin     bool
+	FileCount   int
+	SizeHuman   string
+	UpdatedRel  string
+	UpdatedAbs  string
+	ExpiryLabel string
+}
+
 func (s *Server) renderIndex(w http.ResponseWriter, _ *http.Request) {
 	sites, err := s.store.List()
 	if err != nil {
@@ -410,41 +512,167 @@ func (s *Server) renderIndex(w http.ResponseWriter, _ *http.Request) {
 	}
 	// Track which builtins are shadowed by a disk site of the same name.
 	diskNames := make(map[string]bool, len(sites))
-	for _, s := range sites {
-		diskNames[s.Name] = true
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<!doctype html><meta charset=utf-8><title>crate</title>")
-	fmt.Fprintln(w, "<style>body{font-family:system-ui,sans-serif;max-width:40em;margin:2em auto;padding:0 1em;line-height:1.55}.tag{display:inline-block;font-size:.72em;padding:.15em .55em;border-radius:999px;background:rgba(80,180,120,.2);color:#2f9e63;margin-left:.5em;vertical-align:middle;font-weight:600;letter-spacing:.03em}</style>")
-	fmt.Fprintln(w, "<h1>crate</h1>")
-
-	hasAny := len(sites) > 0
-	for _, b := range s.builtins {
-		if !diskNames[b.Name] {
-			hasAny = true
-			break
-		}
-	}
-	if !hasAny {
-		fmt.Fprintln(w, "<p>No sites deployed yet. Try <code>crate push ./dir name</code>.</p>")
-		return
-	}
-
-	fmt.Fprintln(w, "<ul>")
 	for _, site := range sites {
-		fmt.Fprintf(w, "<li><a href=\"/%s/\">%s</a> &middot; %d files &middot; %d bytes</li>\n",
-			html.EscapeString(site.Name), html.EscapeString(site.Name), site.FileCount, site.SizeBytes)
+		diskNames[site.Name] = true
 	}
+
+	groups := groupDiskSites(sites)
 	for _, b := range s.builtins {
 		if diskNames[b.Name] {
 			continue // shadowed by a disk site with the same name
 		}
 		files, size := countEmbedded(b.FS)
-		fmt.Fprintf(w, "<li><a href=\"/%s/\">%s</a> <span class=\"tag\">built-in</span> &middot; %d files &middot; %d bytes</li>\n",
-			html.EscapeString(b.Name), html.EscapeString(b.Name), files, size)
+		groups = append(groups, siteGroup{Rows: []siteRow{{
+			Name:      b.Name,
+			Label:     b.Name,
+			Href:      "/" + b.Name + "/",
+			Builtin:   true,
+			FileCount: files,
+			SizeHuman: humanSize(size),
+		}}})
 	}
-	fmt.Fprintln(w, "</ul>")
+
+	s.executeIndex(w, indexView{
+		Title:  "crate",
+		Empty:  len(groups) == 0,
+		Groups: groups,
+	})
+}
+
+// renderGroupIndex serves the synthetic /<prefix>/ page listing the disk sites
+// namespaced under prefix. children is guaranteed non-empty by the caller.
+func (s *Server) renderGroupIndex(w http.ResponseWriter, prefix string, children []wire.Site) {
+	rows := make([]siteRow, 0, len(children))
+	for _, site := range children {
+		rows = append(rows, diskRow(site, strings.TrimPrefix(site.Name, prefix+".")))
+	}
+	s.executeIndex(w, indexView{
+		Title:  prefix,
+		Group:  true,
+		Groups: []siteGroup{{Rows: rows}},
+	})
+}
+
+func (s *Server) executeIndex(w http.ResponseWriter, view indexView) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.indexTmpl.Execute(w, view); err != nil {
+		s.log.Printf("render index: %v", err)
+	}
+}
+
+// groupDiskSites turns a sorted site list into ordered index groups. Sites
+// whose name contains a dot are grouped under the prefix before the first dot
+// (myproject.docs, myproject.plan -> a "myproject" group); undotted names
+// render as bare, headerless rows. A group with a single member is only
+// promoted to a header when that member is itself namespaced.
+func groupDiskSites(sites []wire.Site) []siteGroup {
+	order := make([]string, 0)
+	byPrefix := make(map[string][]wire.Site)
+	for _, site := range sites {
+		prefix := site.Name
+		if i := strings.Index(site.Name, "."); i >= 0 {
+			prefix = site.Name[:i]
+		}
+		if _, seen := byPrefix[prefix]; !seen {
+			order = append(order, prefix)
+		}
+		byPrefix[prefix] = append(byPrefix[prefix], site)
+	}
+
+	groups := make([]siteGroup, 0, len(order))
+	for _, prefix := range order {
+		members := byPrefix[prefix]
+		grouped := len(members) > 1 || strings.Contains(members[0].Name, ".")
+		rows := make([]siteRow, 0, len(members))
+		for _, site := range members {
+			label := site.Name
+			if grouped {
+				label = strings.TrimPrefix(site.Name, prefix+".")
+				if label == "" {
+					label = site.Name
+				}
+			}
+			rows = append(rows, diskRow(site, label))
+		}
+		groups = append(groups, siteGroup{
+			Name:    prefix,
+			Href:    "/" + prefix + "/",
+			Grouped: grouped,
+			Rows:    rows,
+		})
+	}
+	return groups
+}
+
+func diskRow(site wire.Site, label string) siteRow {
+	row := siteRow{
+		Name:      site.Name,
+		Label:     label,
+		Href:      "/" + site.Name + "/",
+		FileCount: site.FileCount,
+		SizeHuman: humanSize(site.SizeBytes),
+	}
+	if !site.UpdatedAt.IsZero() {
+		row.UpdatedRel = relTime(site.UpdatedAt, time.Now())
+		row.UpdatedAbs = site.UpdatedAt.Format(time.RFC3339)
+	}
+	if site.ExpiresAt != nil {
+		if d := time.Until(*site.ExpiresAt); d > 0 {
+			row.ExpiryLabel = "expires in " + humanDuration(d)
+		} else {
+			row.ExpiryLabel = "expired"
+		}
+	}
+	return row
+}
+
+// humanSize formats a byte count as a short human-readable string.
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// relTime renders t relative to now as a compact "5m ago"/"2h ago"/"3d ago",
+// falling back to an absolute date beyond a week.
+func relTime(t, now time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < 0:
+		return t.Format("2006-01-02")
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("2006-01-02")
+	}
+}
+
+// humanDuration renders a positive future duration compactly (e.g. "23h",
+// "45m", "3d").
+func humanDuration(d time.Duration) string {
+	switch {
+	case d >= 24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return "<1m"
+	}
 }
 
 func countEmbedded(fsys fs.FS) (files int, size int64) {
