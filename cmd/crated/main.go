@@ -69,6 +69,12 @@ func run(root cli) error {
 	// expand far past its on-wire size.
 	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
 	srv := server.New(cfg, store, tokens, builtin.Sites(), logger)
+	if cfg.IndexTemplate != "" {
+		if err := srv.UseIndexTemplateFile(cfg.IndexTemplate); err != nil {
+			return err
+		}
+		logger.Printf("index:  %s (custom)", cfg.IndexTemplate)
+	}
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,

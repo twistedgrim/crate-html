@@ -176,6 +176,29 @@ func (s *Store) DeleteExpired(now time.Time) ([]string, error) {
 	return deleted, nil
 }
 
+// Names returns the names of every site under root, without stat'ing their
+// contents. It is the cheap counterpart to List for callers that only need to
+// know which sites exist (for example resolving a per-project group prefix on
+// what would otherwise be a 404).
+func (s *Store) Names() ([]string, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if ValidateName(name) != nil {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
 // List returns metadata for every site under root.
 func (s *Store) List() ([]wire.Site, error) {
 	entries, err := os.ReadDir(s.root)

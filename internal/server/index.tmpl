@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fffaf2;
+  --fg: #1f1a14;
+  --muted: #6b5c44;
+  --accent: #b8631a;
+  --line: #ead9c0;
+  --card: #fff4e2;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1611;
+    --fg: #f1e6d3;
+    --muted: #b09a78;
+    --accent: #e09545;
+    --line: #3a2f23;
+    --card: #221c15;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  max-width: 46rem;
+  margin: 2.5rem auto;
+  padding: 0 1.25rem 4rem;
+  line-height: 1.55;
+}
+header.page { margin-bottom: 1.5rem; }
+h1 { font-size: 1.9rem; letter-spacing: -0.02em; margin: 0; }
+h1 a { color: inherit; text-decoration: none; }
+.tagline { color: var(--muted); margin: 0.25rem 0 0; font-size: 0.95rem; }
+.group { margin-top: 2rem; }
+.group > h2 {
+  font-size: 1.05rem; margin: 0 0 0.6rem;
+  padding-bottom: 0.3rem; border-bottom: 1px dashed var(--line);
+}
+.group > h2 a { color: var(--accent); text-decoration: none; }
+.group > h2 a:hover { text-decoration: underline; }
+ul.sites { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+li.site {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+}
+li.site a.name {
+  color: var(--accent); font-weight: 600; text-decoration: none;
+  font-size: 1.05rem;
+}
+li.site a.name:hover { text-decoration: underline; }
+.badge {
+  display: inline-block; font-size: 0.68rem; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 0.1em 0.5em; border-radius: 999px; margin-left: 0.45rem;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent); vertical-align: middle;
+}
+.meta {
+  margin-top: 0.3rem; color: var(--muted);
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.meta span + span::before { content: " · "; }
+.empty {
+  color: var(--muted); background: var(--card);
+  border: 1px dashed var(--line); border-radius: 8px;
+  padding: 1.2rem; text-align: center;
+}
+.empty code {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  padding: 0.1em 0.4em; border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+footer {
+  margin-top: 2.5rem; padding-top: 1rem;
+  border-top: 1px dashed var(--line);
+  color: var(--muted); font-size: 0.82rem;
+}
+</style>
+<header class="page">
+  <h1><a href="/">{{.Title}}</a></h1>
+  {{if .Group}}<p class="tagline">Sites under <code>{{.Title}}</code></p>{{else}}<p class="tagline">Deployed HTML, served fresh.</p>{{end}}
+</header>
+
+{{if .Empty}}
+<div class="empty">No sites deployed yet. Try <code>crate push ./dir name</code>.</div>
+{{else}}
+{{range .Groups}}
+<section class="group">
+  {{if .Grouped}}<h2><a href="{{.Href}}">{{.Name}}</a></h2>{{end}}
+  <ul class="sites">
+    {{range .Rows}}
+    <li class="site">
+      <a class="name" href="{{.Href}}" title="{{.Name}}">{{.Label}}</a>{{if .Builtin}}<span class="badge">built-in</span>{{end}}
+      <div class="meta">
+        <span>{{.FileCount}} files</span>
+        <span>{{.SizeHuman}}</span>
+        {{if .UpdatedRel}}<span title="{{.UpdatedAbs}}">updated {{.UpdatedRel}}</span>{{end}}
+        {{if .ExpiryLabel}}<span>{{.ExpiryLabel}}</span>{{end}}
+      </div>
+    </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+{{end}}
+
+<footer>Served by crate.</footer>
+</html>
