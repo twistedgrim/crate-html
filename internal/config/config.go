@@ -32,9 +32,10 @@ const (
 // overriding those would silently no-op. Set CRATE_LISTEN_ADDR (and
 // CRATE_BASE_URL if needed) directly.
 const (
-	EnvListenAddr = "CRATE_LISTEN_ADDR"
-	EnvBaseURL    = "CRATE_BASE_URL"
-	EnvToken      = "CRATE_TOKEN"
+	EnvListenAddr    = "CRATE_LISTEN_ADDR"
+	EnvBaseURL       = "CRATE_BASE_URL"
+	EnvToken         = "CRATE_TOKEN"
+	EnvIndexTemplate = "CRATE_INDEX_TEMPLATE"
 )
 
 // Config is the on-disk shape of config.yaml.
@@ -48,6 +49,12 @@ type Config struct {
 	Port int `yaml:"port"`
 	// Token is the shared bearer token for /api endpoints.
 	Token string `yaml:"token"`
+	// IndexTemplate is an optional path to an html/template file the daemon
+	// renders for the root "/" and per-project "/<prefix>/" index pages
+	// instead of the embedded default. Empty means use the built-in template.
+	// Operator-supplied (config + filesystem access), never pushed over the
+	// API.
+	IndexTemplate string `yaml:"index_template"`
 }
 
 // Paths bundles the resolved on-disk locations used by both binaries.
@@ -161,6 +168,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvToken); v != "" {
 		cfg.Token = v
+	}
+	if v := os.Getenv(EnvIndexTemplate); v != "" {
+		cfg.IndexTemplate = v
 	}
 }
 

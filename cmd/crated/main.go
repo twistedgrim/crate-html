@@ -56,6 +56,12 @@ func run(root cli) error {
 
 	store := storage.New(paths.SitesDir)
 	srv := server.New(cfg, store, builtin.Sites(), logger)
+	if cfg.IndexTemplate != "" {
+		if err := srv.UseIndexTemplateFile(cfg.IndexTemplate); err != nil {
+			return err
+		}
+		logger.Printf("index:  %s (custom)", cfg.IndexTemplate)
+	}
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
