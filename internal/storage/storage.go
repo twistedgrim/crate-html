@@ -31,17 +31,27 @@ var ErrNotFound = errors.New("site not found")
 // ErrUnsafePath is returned when a tar entry would escape the site directory.
 var ErrUnsafePath = errors.New("unsafe path in archive")
 
+// ErrSiteTooLarge is returned when extracting an archive would exceed the
+// store's max site size. This guards the *logical* size: a sparse tar can
+// encode gigabytes of zeros in a few kilobytes on the wire, so an HTTP
+// body-size cap alone does not bound what lands on disk.
+var ErrSiteTooLarge = errors.New("site exceeds maximum size")
+
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 // Store owns the sites root directory.
 type Store struct {
-	root string
+	root         string
+	maxSiteBytes int64 // 0 = unlimited
 }
 
 // New returns a Store rooted at sitesDir. The directory must already exist.
 func New(sitesDir string) *Store {
 	return &Store{root: sitesDir}
 }
+
+// SetMaxSiteBytes caps the total extracted size of a site. 0 disables the cap.
+func (s *Store) SetMaxSiteBytes(n int64) { s.maxSiteBytes = n }
 
 // Root returns the sites root directory.
 func (s *Store) Root() string { return s.root }
@@ -277,7 +287,7 @@ func (s *Store) replaceFromTar(name string, r io.Reader, afterInstall func() err
 		return wire.Site{}, fmt.Errorf("stage dir: %w", err)
 	}
 
-	if err := extractTar(stage, r); err != nil {
+	if err := extractTar(stage, r, s.maxSiteBytes); err != nil {
 		_ = os.RemoveAll(stage)
 		return wire.Site{}, err
 	}
@@ -316,8 +326,9 @@ func (s *Store) replaceFromTar(name string, r io.Reader, afterInstall func() err
 	return s.Stat(name)
 }
 
-func extractTar(dst string, r io.Reader) error {
+func extractTar(dst string, r io.Reader, limit int64) error {
 	tr := tar.NewReader(r)
+	var written int64
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -348,9 +359,21 @@ func extractTar(dst string, r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
+			// Copy through a limiter so an oversized (e.g. sparse) archive is
+			// cut off mid-file instead of after it has already hit the disk.
+			src := io.Reader(tr)
+			if limit > 0 {
+				src = io.LimitReader(tr, limit-written+1)
+			}
+			n, err := io.Copy(f, src)
+			written += n
+			if err != nil {
 				_ = f.Close()
 				return err
+			}
+			if limit > 0 && written > limit {
+				_ = f.Close()
+				return fmt.Errorf("%w: extracted more than %d bytes", ErrSiteTooLarge, limit)
 			}
 			if err := f.Close(); err != nil {
 				return err

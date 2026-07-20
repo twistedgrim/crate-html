@@ -146,6 +146,46 @@ func TestValidateName(t *testing.T) {
 	}
 }
 
+func TestRevokeKeepsStateOnSaveFailure(t *testing.T) {
+	s, path := newStore(t)
+	now := time.Now()
+	plain, rec, err := s.Create("sticky", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the directory unwritable so the tokens.yaml rewrite fails.
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	if err := s.Revoke(rec.ID); err == nil {
+		t.Fatal("revoke succeeded despite unwritable store")
+	}
+	// Memory must still match disk: the token was NOT revoked, so it must
+	// keep verifying — otherwise a restart would silently resurrect it after
+	// the caller was told it still exists.
+	if _, ok := s.Verify(plain, now); !ok {
+		t.Error("failed revoke left the token unverifiable in memory")
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.Verify(plain, now); !ok {
+		t.Error("on-disk store lost the token after a failed revoke")
+	}
+	// And a retry once the disk recovers works.
+	if err := s.Revoke(rec.ID); err != nil {
+		t.Fatalf("retry revoke: %v", err)
+	}
+}
+
 func TestFilePermissions(t *testing.T) {
 	s, path := newStore(t)
 	if _, _, err := s.Create("perm", nil, time.Now()); err != nil {

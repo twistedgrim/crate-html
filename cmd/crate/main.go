@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Twistedgrim/crate-html/internal/cliclient"
@@ -32,14 +33,19 @@ func (c *pushCmd) Run(g *globals) error {
 		return err
 	}
 	fmt.Printf("pushed %s (%d files, %d bytes)\n", res.Site.Name, res.Site.FileCount, res.Site.SizeBytes)
-	fmt.Println(res.URL)
+	// Build the display URL from the base URL this client actually dialed,
+	// not the server-reported one: behind Docker port-mapping or a reverse
+	// proxy the daemon only knows its internal address, so res.URL would be
+	// a dead link from the caller's side of the boundary.
+	url := strings.TrimRight(g.cfg.BaseURL, "/") + "/" + res.Site.Name + "/"
+	fmt.Println(url)
 	if res.Site.ExpiresAt == nil {
 		fmt.Println("expires never")
 	} else {
 		fmt.Println("expires", res.Site.ExpiresAt.Local().Format(time.RFC3339))
 	}
 	if c.Open {
-		if err := openBrowser(res.URL); err != nil {
+		if err := openBrowser(url); err != nil {
 			return fmt.Errorf("open browser: %w", err)
 		}
 	}

@@ -171,6 +171,40 @@ func TestRevokeUnknownTokenIs404(t *testing.T) {
 	}
 }
 
+// TestOversizedExtractionIs413 covers the logical-size cap: the wire body is
+// small (under MaxUploadBytes) but extraction exceeds the store's site cap,
+// as a sparse tar would.
+func TestOversizedExtractionIs413(t *testing.T) {
+	ts, store := newTestServer(t, nil)
+	store.SetMaxSiteBytes(64)
+
+	content := bytes.Repeat([]byte("z"), 512)
+	var tarbuf bytes.Buffer
+	tw := tar.NewWriter(&tarbuf)
+	if err := tw.WriteHeader(&tar.Header{Name: "index.html", Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest("PUT", ts.URL+wire.PathAPISites+"/sparse-ish", &tarbuf)
+	req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("got %d, want 413", resp.StatusCode)
+	}
+	if exists, _ := store.Exists("sparse-ish"); exists {
+		t.Error("oversized extraction created a site")
+	}
+}
+
 func TestOversizedUploadIs413(t *testing.T) {
 	ts, store := newTestServer(t, nil)
 

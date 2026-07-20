@@ -39,6 +39,7 @@ func newTestServerWithTokens(t *testing.T, builtins []builtin.Site) (*httptest.S
 	t.Helper()
 	root := t.TempDir()
 	store := storage.New(root)
+	store.SetMaxSiteBytes(1 << 20)
 	tokens, err := token.Load(filepath.Join(t.TempDir(), "tokens.yaml"))
 	if err != nil {
 		t.Fatal(err)

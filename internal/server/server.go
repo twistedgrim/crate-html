@@ -178,7 +178,7 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	site, err := s.store.ReplaceFromTarWithExpiry(name, body, expiry)
 	if err != nil {
 		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
+		if errors.As(err, &tooBig) || errors.Is(err, storage.ErrSiteTooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge,
 				fmt.Sprintf("upload exceeds %d bytes (max_upload_bytes in config.yaml)", s.cfg.MaxUploadBytes))
 			return

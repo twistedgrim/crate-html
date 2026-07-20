@@ -199,10 +199,22 @@ func (s *Store) Revoke(idOrName string) error {
 	if idx < 0 {
 		return fmt.Errorf("%w: %q", ErrNotFound, idOrName)
 	}
+	// Build a fresh slice and swap it in only after a successful save:
+	// if the write fails, memory must keep matching the on-disk file, or a
+	// daemon restart would silently resurrect a token the caller was told
+	// still exists (or vice versa).
 	removed := s.recs[idx]
-	s.recs = append(s.recs[:idx], s.recs[idx+1:]...)
+	next := make([]Record, 0, len(s.recs)-1)
+	next = append(next, s.recs[:idx]...)
+	next = append(next, s.recs[idx+1:]...)
+	prev := s.recs
+	s.recs = next
+	if err := s.saveLocked(); err != nil {
+		s.recs = prev
+		return err
+	}
 	delete(s.lastSaved, removed.ID)
-	return s.saveLocked()
+	return nil
 }
 
 // Verify checks a bearer value. It returns the matching record and true only

@@ -65,6 +65,9 @@ func run(root cli) error {
 	}
 
 	store := storage.New(paths.SitesDir)
+	// Cap logical extracted size, not just the HTTP body: a sparse tar can
+	// expand far past its on-wire size.
+	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
 	srv := server.New(cfg, store, tokens, builtin.Sites(), logger)
 
 	httpSrv := &http.Server{
