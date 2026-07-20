@@ -34,6 +34,14 @@ Two binaries, one Go module:
 | `DELETE` | `/api/sites/{name}` | Remove a deployed site |
 | `GET` | `/api/sites` | List all sites with metadata |
 
+### Root-token only
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/tokens` | Mint a named API token (plaintext returned once) |
+| `GET` | `/api/tokens` | List minted tokens (metadata only, never secrets) |
+| `DELETE` | `/api/tokens/{id}` | Revoke a token by id or name, effective immediately |
+
 ### Public (no auth)
 
 | Method | Path | Purpose |
@@ -86,13 +94,28 @@ A request to `/foo` (no trailing slash) 302s to `/foo/` so relative links resolv
 
 ## Auth model
 
+Two credential tiers, both sent as `Authorization: Bearer <value>`:
+
+### Root token
+
 - 32 random bytes (hex-encoded → 64 chars) generated on first daemon startup.
 - Stored at `$XDG_CONFIG_HOME/crate/config.yaml` with mode `0600`.
-- Token persists across daemon restarts. Only deleting the config file regenerates it.
-- All mutating `/api/sites/*` endpoints check the bearer header.
-- `/api/status` and all static-serve paths are public.
+- Persists across daemon restarts. Only deleting the config file regenerates it.
+- Authorizes everything, and is the *only* credential accepted by `/api/tokens` — minted tokens can manage sites but can never mint, list, or revoke tokens. That keeps privilege escalation impossible without introducing scopes.
 
-The CLI reads the same `config.yaml` by default, so local pushes work without any extra setup. For agents running outside the daemon's host (e.g. host CLI → dockerized daemon), the `CRATE_TOKEN` env var overrides the file-loaded token process-locally.
+### Named API tokens (`internal/token`)
+
+- Shape: `crate_<id>_<secret>` — 8-hex-char public id + 64-hex-char secret. The id makes verification an O(1) lookup and shows up in listings/logs without exposing the credential.
+- Stored in `$XDG_CONFIG_HOME/crate/tokens.yaml` (mode `0600`, written atomically via temp-file + rename) as SHA-256 hashes only. Plain SHA-256 is appropriate because secrets are high-entropy random, not passwords.
+- The plaintext is returned exactly once, by `POST /api/tokens`.
+- Optional expiry; `last_used_at` is tracked per token and persisted at most once a minute so busy clients don't hammer the file.
+- Revocation deletes the record — effective on the next request, no restart.
+
+All bearer comparisons are constant-time (`crypto/subtle`). `/api/status` and all static-serve paths are public.
+
+The CLI reads the same `config.yaml` by default, so local pushes work without any extra setup. For agents running outside the daemon's host (e.g. host CLI → dockerized daemon), the `CRATE_TOKEN` env var overrides the file-loaded token process-locally — it may hold the root token or a minted token.
+
+Site uploads are capped by `max_upload_bytes` (default 100 MiB); oversized pushes get `413` and never touch the live site.
 
 ## Storage model
 

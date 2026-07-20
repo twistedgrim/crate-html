@@ -130,14 +130,81 @@ func (c *statusCmd) Run(g *globals) error {
 	return nil
 }
 
-type tokenCmd struct{}
+type tokenCmd struct {
+	Show   tokenShowCmd   `cmd:"" default:"1" hidden:"" help:"Print the root bearer token from the loaded config."`
+	Create tokenCreateCmd `cmd:"" help:"Mint a named API token (requires the root token)."`
+	Ls     tokenLsCmd     `cmd:"" help:"List minted API tokens."`
+	Revoke tokenRevokeCmd `cmd:"" help:"Revoke a minted API token by id or name."`
+}
 
-func (c *tokenCmd) Run(g *globals) error {
+type tokenShowCmd struct{}
+
+func (c *tokenShowCmd) Run(g *globals) error {
 	if g.cfg.Token == "" {
 		return fmt.Errorf("no token set in config")
 	}
 	_, err := io.WriteString(os.Stdout, g.cfg.Token+"\n")
 	return err
+}
+
+type tokenCreateCmd struct {
+	Name    string `arg:"" help:"Token name (lowercase, dot/hyphen/underscore allowed), e.g. the client it belongs to."`
+	Expires string `help:"Expiry duration (for example 720h), or 'never' (default)." default:"never" placeholder:"DURATION|never"`
+}
+
+func (c *tokenCreateCmd) Run(g *globals) error {
+	client := cliclient.New(g.cfg)
+	res, err := client.CreateToken(context.Background(), c.Name, c.Expires)
+	if err != nil {
+		return err
+	}
+	// Secret to stdout (pipe-friendly), guidance to stderr.
+	fmt.Println(res.Token)
+	fmt.Fprintf(os.Stderr, "token %q created (id %s). This is the only time the secret is shown — store it now.\n",
+		res.Info.Name, res.Info.ID)
+	if res.Info.ExpiresAt != nil {
+		fmt.Fprintln(os.Stderr, "expires", res.Info.ExpiresAt.Local().Format(time.RFC3339))
+	}
+	return nil
+}
+
+type tokenLsCmd struct{}
+
+func (c *tokenLsCmd) Run(g *globals) error {
+	client := cliclient.New(g.cfg)
+	tokens, err := client.ListTokens(context.Background())
+	if err != nil {
+		return err
+	}
+	if len(tokens) == 0 {
+		fmt.Println("(no tokens — mint one with `crate token create <name>`)")
+		return nil
+	}
+	for _, tk := range tokens {
+		expires, lastUsed := "never", "never"
+		if tk.ExpiresAt != nil {
+			expires = tk.ExpiresAt.Local().Format("2006-01-02 15:04")
+		}
+		if tk.LastUsedAt != nil {
+			lastUsed = tk.LastUsedAt.Local().Format("2006-01-02 15:04")
+		}
+		fmt.Printf("%s  %-24s  created %s  expires %s  last used %s\n",
+			tk.ID, tk.Name, tk.CreatedAt.Local().Format("2006-01-02 15:04"), expires, lastUsed)
+	}
+	return nil
+}
+
+type tokenRevokeCmd struct {
+	Token string `arg:"" name:"id-or-name" help:"Token id or name to revoke."`
+}
+
+func (c *tokenRevokeCmd) Run(g *globals) error {
+	client := cliclient.New(g.cfg)
+	if err := client.RevokeToken(context.Background(), c.Token); err != nil {
+		return err
+	}
+	fmt.Println("revoked", c.Token)
+	return nil
 }
 
 type cli struct {
@@ -148,7 +215,7 @@ type cli struct {
 	Rm     rmCmd     `cmd:"" help:"Remove a site."`
 	Open   openCmd   `cmd:"" help:"Open a site in your browser."`
 	Status statusCmd `cmd:"" help:"Show daemon status."`
-	Token  tokenCmd  `cmd:"" help:"Print the bearer token from the loaded config."`
+	Token  tokenCmd  `cmd:"" help:"Print the root token, or manage named API tokens (create/ls/revoke)."`
 }
 
 type globals struct {

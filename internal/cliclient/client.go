@@ -2,6 +2,7 @@
 package cliclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -93,6 +94,70 @@ func (c *Client) List(ctx context.Context) ([]wire.Site, error) {
 // Delete calls DELETE /api/sites/{name}.
 func (c *Client) Delete(ctx context.Context, name string) error {
 	req, err := c.newReq(ctx, http.MethodDelete, wire.PathAPISites+"/"+name, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return decodeErr(resp)
+	}
+	return nil
+}
+
+// CreateToken calls POST /api/tokens. Requires the root token.
+func (c *Client) CreateToken(ctx context.Context, name, expires string) (wire.CreateTokenResponse, error) {
+	body, err := json.Marshal(wire.CreateTokenRequest{Name: name, Expires: expires})
+	if err != nil {
+		return wire.CreateTokenResponse{}, err
+	}
+	req, err := c.newReq(ctx, http.MethodPost, wire.PathAPITokens, bytes.NewReader(body))
+	if err != nil {
+		return wire.CreateTokenResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return wire.CreateTokenResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return wire.CreateTokenResponse{}, decodeErr(resp)
+	}
+	var out wire.CreateTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return wire.CreateTokenResponse{}, err
+	}
+	return out, nil
+}
+
+// ListTokens calls GET /api/tokens. Requires the root token.
+func (c *Client) ListTokens(ctx context.Context) ([]wire.TokenInfo, error) {
+	req, err := c.newReq(ctx, http.MethodGet, wire.PathAPITokens, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, decodeErr(resp)
+	}
+	var out wire.ListTokensResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Tokens, nil
+}
+
+// RevokeToken calls DELETE /api/tokens/{idOrName}. Requires the root token.
+func (c *Client) RevokeToken(ctx context.Context, idOrName string) error {
+	req, err := c.newReq(ctx, http.MethodDelete, wire.PathAPITokens+"/"+idOrName, nil)
 	if err != nil {
 		return err
 	}

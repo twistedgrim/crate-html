@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/storage"
+	"github.com/Twistedgrim/crate-html/internal/token"
 	"github.com/Twistedgrim/crate-html/internal/wire"
 )
 
@@ -36,18 +38,20 @@ const defaultExpiry = 24 * time.Hour
 // Server bundles the HTTP handlers.
 type Server struct {
 	store    *storage.Store
+	tokens   *token.Store
 	cfg      config.Config
 	log      *log.Logger
 	builtins []builtin.Site
 	expiryMu sync.Mutex
 }
 
-// New returns a Server. Pass nil for builtins to skip embedded sites.
-func New(cfg config.Config, store *storage.Store, builtins []builtin.Site, logger *log.Logger) *Server {
+// New returns a Server. Pass nil for builtins to skip embedded sites and nil
+// for tokens to accept only the root config token.
+func New(cfg config.Config, store *storage.Store, tokens *token.Store, builtins []builtin.Site, logger *log.Logger) *Server {
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Server{store: store, cfg: cfg, log: logger, builtins: builtins}
+	return &Server{store: store, tokens: tokens, cfg: cfg, log: logger, builtins: builtins}
 }
 
 // Handler returns the root http.Handler for the daemon.
@@ -60,26 +64,76 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/sites/{name}", s.requireAuth(s.handlePutSite))
 	mux.HandleFunc("DELETE /api/sites/{name}", s.requireAuth(s.handleDeleteSite))
 
+	// Token management is root-only: minted tokens can manage sites but can
+	// never mint, list, or revoke tokens. This keeps privilege escalation
+	// off the table without introducing scopes.
+	mux.HandleFunc("POST /api/tokens", s.requireRoot(s.handleCreateToken))
+	mux.HandleFunc("GET /api/tokens", s.requireRoot(s.handleListTokens))
+	mux.HandleFunc("DELETE /api/tokens/{id}", s.requireRoot(s.handleRevokeToken))
+
 	// Static + index
 	mux.HandleFunc("GET /", s.handlePublic)
 
 	return mux
 }
 
+// bearer extracts the bearer value from the Authorization header, or "" if
+// the header is missing/malformed.
+func bearer(r *http.Request) string {
+	h := r.Header.Get(wire.HeaderAuth)
+	const prefix = "Bearer "
+	if !strings.HasPrefix(h, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(h, prefix)
+}
+
+func (s *Server) isRoot(got string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.Token)) == 1
+}
+
+// requireAuth admits the root config token or any minted, unexpired API token.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h := r.Header.Get(wire.HeaderAuth)
-		const prefix = "Bearer "
-		if !strings.HasPrefix(h, prefix) {
+		got := bearer(r)
+		if got == "" {
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		got := strings.TrimPrefix(h, prefix)
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.Token)) != 1 {
-			writeError(w, http.StatusUnauthorized, "invalid token")
+		if s.isRoot(got) {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		if s.tokens != nil {
+			if _, ok := s.tokens.Verify(got, time.Now()); ok {
+				next(w, r)
+				return
+			}
+		}
+		writeError(w, http.StatusUnauthorized, "invalid token")
+	}
+}
+
+// requireRoot admits only the root config token.
+func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		got := bearer(r)
+		if got == "" {
+			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		if s.isRoot(got) {
+			next(w, r)
+			return
+		}
+		// A valid minted token is authenticated but not authorized here.
+		if s.tokens != nil {
+			if _, ok := s.tokens.Verify(got, time.Now()); ok {
+				writeError(w, http.StatusForbidden, "token management requires the root token")
+				return
+			}
+		}
+		writeError(w, http.StatusUnauthorized, "invalid token")
 	}
 }
 
@@ -120,8 +174,15 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	s.expiryMu.Lock()
 	defer s.expiryMu.Unlock()
 
-	site, err := s.store.ReplaceFromTarWithExpiry(name, r.Body, expiry)
+	body := http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes)
+	site, err := s.store.ReplaceFromTarWithExpiry(name, body, expiry)
 	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("upload exceeds %d bytes (max_upload_bytes in config.yaml)", s.cfg.MaxUploadBytes))
+			return
+		}
 		if errors.Is(err, storage.ErrUnsafePath) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -154,6 +215,92 @@ func parseExpiry(value string) (*time.Duration, error) {
 	d, err := time.ParseDuration(value)
 	if err != nil || d <= 0 {
 		return nil, fmt.Errorf("invalid expiry %q: use a positive duration (for example 24h) or never", value)
+	}
+	return &d, nil
+}
+
+func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
+	if s.tokens == nil {
+		writeError(w, http.StatusInternalServerError, "token store unavailable")
+		return
+	}
+	defer r.Body.Close()
+	var req wire.CreateTokenRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	ttl, err := parseTokenExpiry(req.Expires)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plaintext, rec, err := s.tokens.Create(req.Name, ttl, time.Now())
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, token.ErrDuplicateName) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	s.log.Printf("token created: %s (%s)", rec.Name, rec.ID)
+	writeJSON(w, http.StatusCreated, wire.CreateTokenResponse{
+		Token: plaintext,
+		Info:  tokenInfo(rec),
+	})
+}
+
+func (s *Server) handleListTokens(w http.ResponseWriter, _ *http.Request) {
+	if s.tokens == nil {
+		writeError(w, http.StatusInternalServerError, "token store unavailable")
+		return
+	}
+	recs := s.tokens.List()
+	out := make([]wire.TokenInfo, len(recs))
+	for i, r := range recs {
+		out[i] = tokenInfo(r)
+	}
+	writeJSON(w, http.StatusOK, wire.ListTokensResponse{Tokens: out})
+}
+
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	if s.tokens == nil {
+		writeError(w, http.StatusInternalServerError, "token store unavailable")
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.tokens.Revoke(id); err != nil {
+		if errors.Is(err, token.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.log.Printf("token revoked: %s", id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func tokenInfo(r token.Record) wire.TokenInfo {
+	return wire.TokenInfo{
+		ID:         r.ID,
+		Name:       r.Name,
+		CreatedAt:  r.CreatedAt,
+		ExpiresAt:  r.ExpiresAt,
+		LastUsedAt: r.LastUsedAt,
+	}
+}
+
+// parseTokenExpiry interprets CreateTokenRequest.Expires. Unlike site expiry,
+// the default is "never" — tokens are managed credentials, not artifacts.
+func parseTokenExpiry(value string) (*time.Duration, error) {
+	if value == "" || value == "never" {
+		return nil, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return nil, fmt.Errorf("invalid expiry %q: use a positive duration (for example 720h) or never", value)
 	}
 	return &d, nil
 }
