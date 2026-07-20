@@ -18,8 +18,12 @@ import (
 const (
 	appName        = "crate"
 	configFileName = "config.yaml"
+	tokensFileName = "tokens.yaml"
 	defaultPort    = 7777
 	tokenBytes     = 32
+
+	// defaultMaxUploadBytes caps a single PUT /api/sites body (100 MiB).
+	defaultMaxUploadBytes = 100 << 20
 )
 
 // Environment variable names that override the corresponding config fields.
@@ -46,13 +50,17 @@ type Config struct {
 	ListenAddr string `yaml:"listen_addr"`
 	// Port is the default port used by ListenAddr and BaseURL.
 	Port int `yaml:"port"`
-	// Token is the shared bearer token for /api endpoints.
+	// Token is the root bearer token. It authenticates all /api endpoints
+	// and is the only credential accepted by /api/tokens (token management).
 	Token string `yaml:"token"`
+	// MaxUploadBytes caps a single site upload body. Defaults to 100 MiB.
+	MaxUploadBytes int64 `yaml:"max_upload_bytes"`
 }
 
 // Paths bundles the resolved on-disk locations used by both binaries.
 type Paths struct {
 	ConfigFile string
+	TokensFile string
 	SitesDir   string
 	LogDir     string
 }
@@ -75,6 +83,7 @@ func ResolvePaths() (Paths, error) {
 
 	return Paths{
 		ConfigFile: filepath.Join(configDir, configFileName),
+		TokensFile: filepath.Join(configDir, tokensFileName),
 		SitesDir:   sitesDir,
 		LogDir:     logDir,
 	}, nil
@@ -149,6 +158,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = fmt.Sprintf("http://localhost:%d", cfg.Port)
+	}
+	if cfg.MaxUploadBytes <= 0 {
+		cfg.MaxUploadBytes = defaultMaxUploadBytes
 	}
 }
 

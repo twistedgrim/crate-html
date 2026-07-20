@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/server"
 	"github.com/Twistedgrim/crate-html/internal/storage"
+	"github.com/Twistedgrim/crate-html/internal/token"
 	"github.com/alecthomas/kong"
 )
 
@@ -43,6 +45,9 @@ func run(root cli) error {
 	}
 	if root.Config != "" {
 		paths.ConfigFile = root.Config
+		// tokens.yaml lives beside an explicitly chosen config file so a
+		// --config deployment is fully self-contained.
+		paths.TokensFile = filepath.Join(filepath.Dir(root.Config), "tokens.yaml")
 	}
 	cfg, err := config.LoadOrInit(paths)
 	if err != nil {
@@ -54,8 +59,16 @@ func run(root cli) error {
 	logger.Printf("sites:  %s", paths.SitesDir)
 	logger.Printf("listen: %s", cfg.BaseURL)
 
+	tokens, err := token.Load(paths.TokensFile)
+	if err != nil {
+		return err
+	}
+
 	store := storage.New(paths.SitesDir)
-	srv := server.New(cfg, store, builtin.Sites(), logger)
+	// Cap logical extracted size, not just the HTTP body: a sparse tar can
+	// expand far past its on-wire size.
+	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
+	srv := server.New(cfg, store, tokens, builtin.Sites(), logger)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,

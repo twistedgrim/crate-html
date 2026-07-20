@@ -20,6 +20,7 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/server"
 	"github.com/Twistedgrim/crate-html/internal/storage"
+	"github.com/Twistedgrim/crate-html/internal/token"
 	"github.com/Twistedgrim/crate-html/internal/wire"
 )
 
@@ -28,20 +29,33 @@ const testToken = "server-test-token"
 // newTestServer wires a Server with isolated storage and optional builtins
 // behind an httptest.NewServer. Returns the httptest URL so tests can dial it.
 func newTestServer(t *testing.T, builtins []builtin.Site) (*httptest.Server, *storage.Store) {
+	ts, store, _ := newTestServerWithTokens(t, builtins)
+	return ts, store
+}
+
+// newTestServerWithTokens additionally exposes the token store for tests
+// that exercise /api/tokens and minted-token auth.
+func newTestServerWithTokens(t *testing.T, builtins []builtin.Site) (*httptest.Server, *storage.Store, *token.Store) {
 	t.Helper()
 	root := t.TempDir()
 	store := storage.New(root)
+	store.SetMaxSiteBytes(1 << 20)
+	tokens, err := token.Load(filepath.Join(t.TempDir(), "tokens.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	logger := log.New(io.Discard, "", 0)
 	cfg := config.Config{
-		BaseURL:    "", // populated below once the httptest URL is known
-		ListenAddr: "127.0.0.1:0",
-		Port:       0,
-		Token:      testToken,
+		BaseURL:        "", // populated below once the httptest URL is known
+		ListenAddr:     "127.0.0.1:0",
+		Port:           0,
+		Token:          testToken,
+		MaxUploadBytes: 1 << 20, // small cap so upload-limit tests stay cheap
 	}
-	srv := server.New(cfg, store, builtins, logger)
+	srv := server.New(cfg, store, tokens, builtins, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return ts, store
+	return ts, store, tokens
 }
 
 // pushFixture pushes a tiny site to disk via the storage layer so we can

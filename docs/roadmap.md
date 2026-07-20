@@ -16,6 +16,7 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
 
 ## Recently shipped
 
+- **Named API tokens.** `crate token create/ls/revoke` backed by root-only `/api/tokens`. Tokens are `crate_<id>_<secret>`, stored as SHA-256 hashes in `tokens.yaml`, with optional expiry, `last_used_at` tracking, and instant revocation. The config-file token is now the root credential; per-client tokens mean revoking one agent doesn't re-key the rest. Also added `max_upload_bytes` (default 100 MiB) so a runaway push can't fill the disk.
 - **Docker.** Multi-stage build, alpine runtime, named volumes for `/config` and `/data`, `task docker:{build,up,down,nuke,logs,token,env,shell}`, env-var overrides for in-container binding.
 - **Go integration suite (`task smoke`).** ~30 tests under `tests/smoke/` (build tag `smoke`) covering lifecycle (status/ls/rm/push), bearer-token enforcement on each `/api/sites/*` verb, path-traversal rejection in URLs and tarballs, built-in cratesplainer serving + disk-shadowing, push variants (dir / stdin / pre-built tar / `--open`), `--config` flag, and `CRATE_TOKEN` env override. Replaces the original bash harness.
 - **Unit-test coverage** across `internal/`:
@@ -100,7 +101,7 @@ Not yet aspirational — closer to notebook margins. Open shape, not committed:
 | Not doing | Why |
 |---|---|
 | Database | Filesystem is enough. `readdir` is the index. |
-| Multi-tenant auth | One human, one machine. Single bearer token. |
+| Multi-tenant auth | One human, several clients. Named tokens (shipped) cover per-client credentials; there are no user accounts, scopes, or per-site ACLs. |
 | Server-side rendering | Sites are static. If you want SSR, render to static first, then push. |
 | Vhosts in `crated` | Path routing is enough. Caddy can rewrite if you ever want vhosts. |
 | Embedded hardware | v0 is laptop-only. Agents call into it, not the other way around. |

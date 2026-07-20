@@ -70,12 +70,24 @@ crate ls                    list deployed sites
 crate rm <name>             remove a site
 crate open <name>           open the site in your default browser
 crate status                show daemon version and site count
-crate token                 print the bearer token from the loaded config
+crate token                 print the root bearer token from the loaded config
+crate token create <name>   mint a named API token (shown once; root token required)
+crate token ls              list minted tokens (id, created, expires, last used)
+crate token revoke <id|name> revoke a minted token immediately
 ```
 
 Site names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. A global `--config <path>` flag (on both `crate` and `crated`) overrides the XDG config-file location.
 
 The daemon checks expiry deadlines once a minute and removes elapsed sites. Expiry metadata is stored separately from site assets, so it is not publicly served. Sites created by older versions without expiry metadata are retained indefinitely.
+
+## Tokens
+
+Two kinds of credential:
+
+- **Root token** — generated into `config.yaml` on first run. Authenticates everything, and is the only credential accepted for token management (`/api/tokens`).
+- **Named API tokens** — minted per client (`crate token create pi-agent`), shaped `crate_<id>_<secret>`. They can push, list, and remove sites but can never mint or revoke tokens. Only a SHA-256 hash is stored (in `tokens.yaml` next to `config.yaml`), so the secret is shown exactly once at creation. Optional `--expires 720h`; revocation (`crate token revoke`) takes effect immediately, no daemon restart.
+
+Give each agent/machine its own named token: `crate token ls` shows per-client `last used`, and revoking one client doesn't re-key the others. Uploads are capped at 100 MiB per push by default (`max_upload_bytes` in `config.yaml`).
 
 ## Layout
 
@@ -84,6 +96,7 @@ cmd/crate/          CLI (kong) — push, ls, rm, open, status, token
 cmd/crated/         HTTP daemon
 internal/wire/      request/response types — the API contract
 internal/config/    XDG config loader, first-run token generation
+internal/token/     named API tokens — tokens.yaml store, hashed secrets
 internal/storage/   filesystem ops, tar in/out, atomic site replacement
 internal/server/    net/http handlers — bearer auth on /api/sites (status is public), static serve
 internal/cliclient/ HTTP client used by `crate`
