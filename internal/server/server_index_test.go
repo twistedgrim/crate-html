@@ -154,6 +154,24 @@ func TestCustomIndexTemplate(t *testing.T) {
 	}
 }
 
+func TestCustomIndexTemplateExecFailureIs500(t *testing.T) {
+	srv, _ := newServerWithConfig(t)
+	tmpl := filepath.Join(t.TempDir(), "index.tmpl")
+	// Parses fine, fails at execution (indexView has no Missing field).
+	if err := os.WriteFile(tmpl, []byte(`{{.Missing.Field}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.UseIndexTemplateFile(tmpl); err != nil {
+		t.Fatalf("UseIndexTemplateFile: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	if status, _ := getBody(t, ts.URL+"/"); status != 500 {
+		t.Errorf("exec-failing template: got %d, want 500", status)
+	}
+}
+
 func TestCustomIndexTemplateErrors(t *testing.T) {
 	srv, _ := newServerWithConfig(t)
 	if err := srv.UseIndexTemplateFile(filepath.Join(t.TempDir(), "missing.tmpl")); err == nil {
