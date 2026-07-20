@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"html/template"
 	"io"
 	"io/fs"
@@ -65,7 +64,6 @@ func New(cfg config.Config, store *storage.Store, tokens *token.Store, builtins 
 		logger = log.Default()
 	}
 	return &Server{store: store, tokens: tokens, cfg: cfg, log: logger, builtins: builtins, indexTmpl: defaultIndexTmpl}
-	return &Server{store: store, cfg: cfg, log: logger, builtins: builtins, indexTmpl: defaultIndexTmpl}
 }
 
 // UseIndexTemplateFile parses path and uses it for the root/group index
