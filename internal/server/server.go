@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
@@ -554,10 +555,17 @@ func (s *Server) renderGroupIndex(w http.ResponseWriter, prefix string, children
 }
 
 func (s *Server) executeIndex(w http.ResponseWriter, view indexView) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.indexTmpl.Execute(w, view); err != nil {
+	// Render into a buffer first so a template that parses but fails at
+	// execution (a custom operator template referencing a missing field)
+	// yields a 500, not a 200 with truncated HTML.
+	var buf bytes.Buffer
+	if err := s.indexTmpl.Execute(&buf, view); err != nil {
 		s.log.Printf("render index: %v", err)
+		writeError(w, http.StatusInternalServerError, "index render failed")
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = buf.WriteTo(w)
 }
 
 // groupDiskSites turns a sorted site list into ordered index groups. Sites
