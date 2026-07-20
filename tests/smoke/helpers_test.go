@@ -17,6 +17,13 @@ import (
 // runCrate exec's the suite's `crate` binary with the suite's XDG env and
 // returns combined output. Use runCrateExpect for assertions on exit code.
 func runCrate(t *testing.T, args ...string) (string, error) {
+	return runCrateWithEnv(t, nil, args...)
+}
+
+// runCrateWithEnv runs crate with the suite's XDG environment plus overrides.
+// Extra variables are appended last so they take precedence over any inherited
+// environment, matching how an agent supplies CRATE_TOKEN or CRATE_BASE_URL.
+func runCrateWithEnv(t *testing.T, extraEnv []string, args ...string) (string, error) {
 	t.Helper()
 	cmd := exec.Command(crateBin, args...)
 	cmd.Env = append(os.Environ(),
@@ -24,6 +31,7 @@ func runCrate(t *testing.T, args ...string) (string, error) {
 		"XDG_DATA_HOME="+filepath.Join(xdgHome, "data"),
 		"XDG_STATE_HOME="+filepath.Join(xdgHome, "state"),
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

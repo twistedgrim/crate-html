@@ -3,7 +3,6 @@
 package smoke
 
 import (
-	"bytes"
 	"net/http"
 	"strings"
 	"testing"
@@ -26,20 +25,15 @@ func TestTokenLifecycle(t *testing.T) {
 		t.Fatalf("no crate_ token in create output:\n%s", out)
 	}
 
-	// The minted token can push a site.
-	tarBytes := tarFromMap(t, map[string]string{"index.html": "minted"})
-	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/sites/minted-push", bytes.NewReader(tarBytes))
+	// A separate agent uses the minted token exactly as documented: as a
+	// CRATE_TOKEN override for the real CLI, not by issuing raw HTTP itself.
+	dir := writeFiles(t, map[string]string{"index.html": "minted"})
+	pushOut, err := runCrateWithEnv(t, []string{"CRATE_TOKEN=" + minted}, "push", dir, "minted-push")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("push with minted token: %v\n%s", err, pushOut)
 	}
-	req.Header.Set("Authorization", "Bearer "+minted)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("push with minted token: %d", resp.StatusCode)
+	if !strings.Contains(pushOut, baseURL+"/minted-push/") {
+		t.Errorf("minted-token push missing URL: %s", pushOut)
 	}
 	t.Cleanup(func() { rmSite(t, "minted-push") })
 
