@@ -39,7 +39,8 @@ Two binaries, one Go module:
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/status` | Liveness probe — version + site count |
-| `GET` | `/` | HTML index linking to all sites (disk + built-in) |
+| `GET` | `/` | HTML index linking to all sites (disk + built-in), grouped by dot-namespace |
+| `GET` | `/<prefix>/` | Synthetic per-project index of sites named `<prefix>.<child>` (only when no real site/built-in owns `<prefix>`) |
 | `GET` | `/<site>/` | Serve `<site>/index.html` |
 | `GET` | `/<site>/<path>` | Serve a file under the site |
 
@@ -122,6 +123,7 @@ Site data lives under `XDG_DATA_HOME` (not `XDG_CACHE_HOME`) deliberately — th
 | `CRATE_LISTEN_ADDR` | `listen_addr` | Bind `0.0.0.0:7777` inside Docker; `127.0.0.1:7777` outside |
 | `CRATE_BASE_URL` | `base_url` | Self-URL returned in `crate push` responses |
 | `CRATE_TOKEN` | `token` | Runtime token override (Docker secrets, host CLI talking to a container) |
+| `CRATE_INDEX_TEMPLATE` | `index_template` | Path to a custom `html/template` for the `/` and `/<prefix>/` index pages |
 
 Overrides stay process-local — the on-disk config isn't rewritten. There's no `CRATE_PORT` env var; `port` only exists to compose default address strings, and overriding it after defaults are applied silently no-ops.
 
@@ -132,6 +134,14 @@ Some sites ship inside the binary via `go:embed` (`internal/builtin/`). Today th
 - **`/cratesplainer/`** — a deliberately-overexplained guide to using crate, present on every fresh install so first-time users have something to read.
 
 The lookup order is **disk first, builtin second**. If you `crate push ./my-version cratesplainer`, your version is served instead. `crate rm cratesplainer` removes your override and the built-in resurfaces. Built-in sites are listed on the `/` index with a `built-in` tag.
+
+## Index rendering
+
+The root `/` page is an `html/template` (`internal/server/index.tmpl`, embedded via `go:embed`) rendered from the live site list plus non-shadowed built-ins. Each row shows file count, human-readable size, relative update time, and (if set) an expiry countdown. The template is theme-aware (light/dark via CSS variables) and dependency-free.
+
+**Dot-grouping / sub-crates.** Site names are still flat single segments (the name regex and tar/storage code are unchanged), but a `.` in a name is treated as a namespace separator *for presentation only*. Pushing `myproject.docs` and `myproject.plan` groups them under a `myproject` header on the root index, and a synthetic index is served at `/myproject/` listing those children — unless a real site or built-in is named exactly `myproject`, which always wins (an exact match is resolved before the synthetic group index in `handlePublic`). This gives per-project overviews without reopening the traversal-sensitive name/path code; each dotted site remains an independent unit with its own push, expiry, and shadowing.
+
+**Pluggable index.** Setting `index_template` in `config.yaml` (or `CRATE_INDEX_TEMPLATE`) points the daemon at an operator-supplied `html/template` file, parsed once at startup — an unparseable template fails the daemon fast. It receives the same view-model as the embedded default (documented on `server.UseIndexTemplateFile`). This is deliberately an operator-side mechanism (config + filesystem access), **not** a pushed site: crated never executes a template that arrived over the public API, preserving the "sites are pure static content" invariant.
 
 ## Deployment topology — the user's setup
 
