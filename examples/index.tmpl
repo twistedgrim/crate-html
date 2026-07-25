@@ -1,0 +1,99 @@
+{{- /*
+  Example custom index template for crated.
+
+  Point the daemon at this file to replace the built-in "/" and "/<prefix>/"
+  index pages:
+
+      # config.yaml
+      index_template: /config/index.tmpl
+
+      # or, equivalently
+      CRATE_INDEX_TEMPLATE=/path/to/index.tmpl
+
+  The file is read and parsed once at startup, so a syntax error fails the
+  daemon fast rather than 500-ing later. It is operator-supplied — crated
+  never executes a template that arrived over the public API.
+
+  ---------------------------------------------------------------------------
+  The view model this template is executed with:
+
+    .Title    string      "crate" on the root index; the group name on /<prefix>/
+    .Group    bool        true when rendering a synthetic per-project index
+    .Empty    bool        true when there is nothing to list
+    .Groups   []Group
+
+  Each Group:
+
+    .Name     string      namespace prefix ("" for ungrouped rows)
+    .Href     string      link to the group index, e.g. "/myproject/"
+    .Grouped  bool        false means bare rows with no header
+    .Rows     []Row
+
+  Each Row:
+
+    .Name         string  full site name, e.g. "myproject.docs"
+    .Label        string  link text: the child suffix inside a group, else .Name
+    .Href         string  "/myproject.docs/"
+    .Builtin      bool    true for sites embedded in the binary
+    .FileCount    int
+    .SizeHuman    string  "12.4 KB"
+    .UpdatedRel   string  "5m ago" — empty if unknown
+    .UpdatedAbs   string  RFC3339 timestamp, for a tooltip
+    .ExpiryLabel  string  "expires in 3d" / "expired" — empty if no expiry
+
+  Values are auto-escaped by html/template. Referencing a field that does not
+  exist fails at execution time and yields a 500, so keep names in sync with
+  the list above.
+*/ -}}
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ .Title }}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    max-width: 44rem;
+    margin: 3rem auto;
+    padding: 0 1.25rem;
+    line-height: 1.6;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+  h1 a { color: inherit; text-decoration: none; }
+  .sub { opacity: 0.6; font-size: 0.85rem; margin: 0 0 2rem; }
+  h2 { font-size: 0.95rem; margin: 2rem 0 0.5rem; opacity: 0.75; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 0.4rem 0; border-bottom: 1px solid rgba(128, 128, 128, 0.2); }
+  .meta { opacity: 0.6; font-size: 0.8rem; }
+  .badge { font-size: 0.7rem; border: 1px solid; border-radius: 3px; padding: 0 0.3em; }
+</style>
+
+<h1><a href="/">{{ .Title }}</a></h1>
+{{ if .Group }}
+  <p class="sub">sites under {{ .Title }}</p>
+{{ else }}
+  <p class="sub">crate index</p>
+{{ end }}
+
+{{ if .Empty }}
+  <p>No sites deployed yet. Try <code>crate push ./dir name</code>.</p>
+{{ else }}
+  {{ range .Groups }}
+    {{ if .Grouped }}<h2><a href="{{ .Href }}">{{ .Name }}/</a></h2>{{ end }}
+    <ul>
+      {{ range .Rows }}
+        <li>
+          <a href="{{ .Href }}" title="{{ .Name }}">{{ .Label }}</a>
+          {{ if .Builtin }}<span class="badge">built-in</span>{{ end }}
+          <div class="meta">
+            {{ .FileCount }} files &middot; {{ .SizeHuman }}
+            {{ if .UpdatedRel }}&middot; <span title="{{ .UpdatedAbs }}">updated {{ .UpdatedRel }}</span>{{ end }}
+            {{ if .ExpiryLabel }}&middot; {{ .ExpiryLabel }}{{ end }}
+          </div>
+        </li>
+      {{ end }}
+    </ul>
+  {{ end }}
+{{ end }}
+</html>
