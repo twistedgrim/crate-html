@@ -72,7 +72,10 @@ func New(cfg config.Config, store *storage.Store, tokens *token.Store, builtins 
 // contain template logic the embedded default does not. Returns an error if
 // the file cannot be read or parsed, so callers can fail fast at startup.
 //
-// The template is executed with an indexView (see renderIndexView): a struct
+// See examples/index.tmpl for a working template with the view model
+// documented inline.
+//
+// The template is executed with an indexView (see renderIndex): a struct
 // of {Title string, Group bool, Empty bool, Groups []siteGroup}, where each
 // siteGroup is {Name, Href string, Grouped bool, Rows []siteRow} and each
 // siteRow is {Name, Label, Href string, Builtin bool, FileCount int,
