@@ -2,7 +2,13 @@ package s3store
 
 import "testing"
 
-func fakeFS() *memFS { return &memFS{files: map[string][]byte{}, dirs: map[string][]string{".": {}}} }
+func fakeFS() *memFS {
+	return &memFS{
+		files: map[string][]byte{},
+		isDir: map[string]bool{".": true},
+		kids:  map[string][]string{".": {}},
+	}
+}
 
 func TestCacheHitAndMiss(t *testing.T) {
 	c := newCache(1000)

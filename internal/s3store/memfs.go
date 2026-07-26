@@ -19,9 +19,14 @@ import (
 // storage has no directories to serve from, so an uploaded archive is unpacked
 // into this and handed to the same http.ServeFileFS path that serves embedded
 // built-in sites.
+// Membership and contents are tracked separately on purpose. Appending a child
+// to a directory's list would otherwise create that directory's map entry as a
+// side effect, making it look already-registered to the loop that walks up to
+// the root — which would then stop before linking it into its own parent.
 type memFS struct {
 	files map[string][]byte   // clean unrooted path -> contents
-	dirs  map[string][]string // clean unrooted dir -> child base names
+	isDir map[string]bool     // set of known directories
+	kids  map[string][]string // directory -> child base names
 	mod   time.Time
 }
 
@@ -37,7 +42,8 @@ type stats struct {
 func unpackTar(r io.Reader, limit int64) (*memFS, stats, error) {
 	m := &memFS{
 		files: make(map[string][]byte),
-		dirs:  map[string][]string{".": {}},
+		isDir: map[string]bool{".": true},
+		kids:  map[string][]string{".": {}},
 		mod:   time.Now().UTC(),
 	}
 	tr := tar.NewReader(r)
@@ -93,36 +99,37 @@ func unpackTar(r io.Reader, limit int64) (*memFS, stats, error) {
 func filepathToSlash(p string) string { return strings.ReplaceAll(p, `\`, "/") }
 
 func (m *memFS) addFile(name string, data []byte) {
+	if _, dup := m.files[name]; dup {
+		return // a later entry replacing an earlier one keeps one listing
+	}
 	m.files[name] = data
-	m.addDir(path.Dir(name))
 	dir := path.Dir(name)
-	m.dirs[dir] = append(m.dirs[dir], path.Base(name))
+	m.addDir(dir)
+	m.kids[dir] = append(m.kids[dir], path.Base(name))
 }
 
 // addDir records dir and every ancestor, so an archive that omits explicit
-// directory entries still yields a walkable tree.
+// directory entries — or lists them after the files inside them — still yields
+// a walkable tree.
+//
+// Walking upward can stop at the first directory already known, because this
+// loop only ever marks a directory after linking it into its parent: anything
+// registered has its whole ancestry registered too.
 func (m *memFS) addDir(dir string) {
-	for {
-		if dir == "" {
-			dir = "."
-		}
-		if _, ok := m.dirs[dir]; !ok {
-			m.dirs[dir] = []string{}
-			if dir != "." {
-				parent := path.Dir(dir)
-				m.dirs[parent] = append(m.dirs[parent], path.Base(dir))
-			}
-		}
-		if dir == "." {
-			return
-		}
-		dir = path.Dir(dir)
+	if dir == "" {
+		dir = "."
+	}
+	for dir != "." && !m.isDir[dir] {
+		parent := path.Dir(dir)
+		m.isDir[dir] = true
+		m.kids[parent] = append(m.kids[parent], path.Base(dir))
+		dir = parent
 	}
 }
 
 func (m *memFS) sortDirs() {
-	for k := range m.dirs {
-		sort.Strings(m.dirs[k])
+	for k := range m.kids {
+		sort.Strings(m.kids[k])
 	}
 }
 
@@ -137,14 +144,14 @@ func (m *memFS) Open(name string) (fs.File, error) {
 			info:   memInfo{name: path.Base(name), size: int64(len(data)), mod: m.mod},
 		}, nil
 	}
-	if children, ok := m.dirs[name]; ok {
+	if m.isDir[name] {
 		base := name
 		if base != "." {
 			base = path.Base(name)
 		}
 		return &memDir{
 			info:    memInfo{name: base, mod: m.mod, dir: true},
-			entries: m.entriesFor(name, children),
+			entries: m.entriesFor(name, m.kids[name]),
 		}, nil
 	}
 	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
@@ -155,11 +162,10 @@ func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
 	}
-	children, ok := m.dirs[name]
-	if !ok {
+	if !m.isDir[name] {
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
 	}
-	return m.entriesFor(name, children), nil
+	return m.entriesFor(name, m.kids[name]), nil
 }
 
 func (m *memFS) entriesFor(dir string, children []string) []fs.DirEntry {

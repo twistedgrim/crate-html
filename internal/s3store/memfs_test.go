@@ -82,6 +82,73 @@ func TestUnpackTarSyntheticDirs(t *testing.T) {
 	}
 }
 
+// tarOrdered builds a tar with entries in exactly the order given, unlike
+// tarOf, which iterates a map and therefore shuffles them per run.
+func tarOrdered(t *testing.T, names ...string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, name := range names {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: name, Mode: 0o644, Size: int64(len(name)), Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestUnpackTarEntryOrderIndependent pins the tree against archive ordering.
+// A deep entry arriving before a shallower sibling used to leave the shared
+// parent directory unlinked from the root: the files were still individually
+// addressable, so serving them worked, but the directory was invisible to any
+// walk of the tree. Only the shuffled ordering of a map-built fixture exposed
+// it, so both orders are asserted explicitly here.
+func TestUnpackTarEntryOrderIndependent(t *testing.T) {
+	orders := map[string][]string{
+		"deep first":    {"docs/img/logo.svg", "docs/guide.html", "index.html"},
+		"shallow first": {"index.html", "docs/guide.html", "docs/img/logo.svg"},
+		"root last":     {"docs/img/logo.svg", "index.html", "docs/guide.html"},
+	}
+	for name, order := range orders {
+		t.Run(name, func(t *testing.T) {
+			fsys, st, err := unpackTar(bytes.NewReader(tarOrdered(t, order...)), 0)
+			if err != nil {
+				t.Fatalf("unpack: %v", err)
+			}
+			if st.fileCount != 3 {
+				t.Errorf("file count = %d, want 3", st.fileCount)
+			}
+			if err := fstest.TestFS(fsys, "index.html", "docs/guide.html", "docs/img/logo.svg"); err != nil {
+				t.Errorf("TestFS: %v", err)
+			}
+			// The intermediate directory must be reachable by walking, not
+			// merely by addressing a file inside it.
+			names := make(map[string]bool)
+			if err := fs.WalkDir(fsys, ".", func(p string, _ fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				names[p] = true
+				return nil
+			}); err != nil {
+				t.Fatalf("walk: %v", err)
+			}
+			for _, want := range []string{"docs", "docs/img", "docs/guide.html", "docs/img/logo.svg", "index.html"} {
+				if !names[want] {
+					t.Errorf("walk did not reach %q", want)
+				}
+			}
+		})
+	}
+}
+
 func TestUnpackTarRejectsTraversal(t *testing.T) {
 	for _, name := range []string{"../escape.html", "/etc/passwd", "a/../../b.html"} {
 		raw := tarOf(t, map[string]string{name: "x"})
