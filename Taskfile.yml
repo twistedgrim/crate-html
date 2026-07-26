@@ -58,6 +58,23 @@ tasks:
     cmds:
       - go test -tags smoke -count=1 ./tests/smoke/...
 
+  smoke:s3:
+    desc: Just the S3-backend end-to-end tests. Starts rustfs in Docker on demand; skips if Docker is unavailable.
+    cmds:
+      - go test -tags smoke -count=1 -run 'TestS3' -v ./tests/smoke/...
+
+  rustfs:up:
+    desc: Start a local rustfs (S3-compatible) server on :9100 for manual testing
+    cmds:
+      - docker compose -f examples/docker-compose.rustfs.yml up -d
+      - sleep 2
+      - docker compose -f examples/docker-compose.rustfs.yml ps
+
+  rustfs:down:
+    desc: Stop the local rustfs server and delete its data
+    cmds:
+      - docker compose -f examples/docker-compose.rustfs.yml down -v
+
   docker:build:
     desc: Build the crate-html Docker image
     cmds:
