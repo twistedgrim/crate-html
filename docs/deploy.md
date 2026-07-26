@@ -182,18 +182,44 @@ or run `task rustfs:up`.
 Sites *and* named API tokens both move to the bucket, so a restart keeps serving
 the same content and keeps accepting the same credentials.
 
-Two things to know before running this in anger:
+### Hybrid: bucket for content, small volume for config
 
-- **Set `CRATE_TOKEN`.** The root token still comes from `config.yaml`, so on a
-  host with no durable config file every restart would otherwise mint a new
-  random one. Named tokens minted through `/api/tokens` are unaffected — they
-  live in the bucket.
+Selecting the S3 backend does not force you to give up a volume entirely. What
+moves to the bucket and what stays local are separate questions:
+
+| | Sites | Named tokens | Root token | Volumes |
+|---|---|---|---|---|
+| Local (default) | disk | disk | `config.yaml` | `/config` + `/data` |
+| **Hybrid** | bucket | bucket | `config.yaml` | `/config` only |
+| Stateless | bucket | bucket | `CRATE_TOKEN` | none |
+
+**Hybrid is what most deployments want.** Mount a small `/config` volume, omit
+`CRATE_TOKEN`, and the root token is generated once and persists exactly as it
+does today — bucket-backed content without a secret to manage. Go fully
+stateless only when you cannot mount anything at all.
+
+Confirm which backend is live from the startup log, which prints the bucket
+instead of a directory:
+
+```
+crated sites:  s3://crate/ (https://s3.example.com)
+```
+
+### Before running this in anger
+
+- **Set `CRATE_TOKEN` if `/config` is not persisted.** The root token still
+  comes from `config.yaml`; without a durable `/config` and without this env var
+  every restart mints a new random one and invalidates whatever your clients
+  were using. Named tokens are unaffected — they live in the bucket.
 - **Multiple replicas go eventually consistent.** A push handled by one replica
   becomes visible to the others within about ten seconds. Expiry also runs
   independently in every replica. Token writes are compare-and-swap, so a
   concurrent mint fails loudly rather than silently dropping the other
   replica's tokens. Pin to one replica if you want the same behavior as the
   local backend.
+
+Full operator reference — permissions, every setting, bucket layout, and the
+rest of the gotchas — is in [`s3-storage.md`](./s3-storage.md).
 
 The design and its tradeoffs are written up in
 [`plans/object-storage-backend.md`](./plans/object-storage-backend.md).

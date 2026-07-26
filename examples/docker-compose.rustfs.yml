@@ -62,6 +62,17 @@ services:
     # No volumes at all. Sites and named tokens are in the bucket, so this
     # container's filesystem is disposable — `docker compose rm crated` and
     # start it again, and nothing is lost.
+    #
+    # For the hybrid mode most deployments actually want — bucket-backed
+    # content, but no root-token secret to manage — drop CRATE_TOKEN above and
+    # mount a small config volume instead:
+    #
+    #   volumes:
+    #     - crate-config:/config
+    #
+    # (and add `crate-config:` to the volumes block at the bottom). The root
+    # token is then generated once and persists across restarts, exactly as in
+    # the default local setup. See docs/s3-storage.md.
 
 volumes:
   rustfs-data:

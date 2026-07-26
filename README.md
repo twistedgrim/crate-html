@@ -139,7 +139,8 @@ task tidy       # go mod tidy
 ## Docs
 
 - [`docs/architecture.md`](docs/architecture.md) — how it works end-to-end (logical view, API, push/serve protocols, deployment topology)
-- [`docs/deploy.md`](docs/deploy.md) — three deployment shapes (local, Docker, Docker + tsdproxy on Tailscale)
+- [`docs/deploy.md`](docs/deploy.md) — four deployment shapes (local, Docker, Docker + tsdproxy on Tailscale, object storage)
+- [`docs/s3-storage.md`](docs/s3-storage.md) — running on S3-compatible object storage: modes, requirements, gotchas
 - [`docs/design.md`](docs/design.md) — *why* the architecture is shaped the way it is
 - [`docs/naming.md`](docs/naming.md) — naming rationale and availability check
 - [`docs/releases.md`](docs/releases.md) — Conventional Commit and Release Please workflow
