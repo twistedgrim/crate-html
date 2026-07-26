@@ -15,6 +15,7 @@ import (
 
 	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
+	"github.com/Twistedgrim/crate-html/internal/s3store"
 	"github.com/Twistedgrim/crate-html/internal/server"
 	"github.com/Twistedgrim/crate-html/internal/storage"
 	"github.com/Twistedgrim/crate-html/internal/token"
@@ -38,6 +39,38 @@ func main() {
 	}
 }
 
+// openStore builds the configured storage backend. Both backends cap the
+// logical extracted size rather than only the HTTP body, because a sparse tar
+// can expand far past its on-wire size.
+//
+// The S3 backend contacts the bucket here so an unreachable endpoint or a
+// missing bucket stops the daemon at startup instead of failing the first push.
+func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (server.Backend, error) {
+	if cfg.StorageBackend == config.BackendS3 {
+		store, err := s3store.New(context.Background(), s3store.Config{
+			Endpoint:     cfg.S3.Endpoint,
+			Bucket:       cfg.S3.Bucket,
+			Region:       cfg.S3.Region,
+			AccessKey:    cfg.S3.AccessKey,
+			SecretKey:    cfg.S3.SecretKey,
+			Prefix:       cfg.S3.Prefix,
+			UseSSL:       true,
+			MaxSiteBytes: cfg.MaxUploadBytes,
+			CacheBytes:   cfg.S3.CacheBytes,
+		})
+		if err != nil {
+			return nil, err
+		}
+		logger.Printf("sites:  s3://%s/%s (%s)", cfg.S3.Bucket, cfg.S3.Prefix, cfg.S3.Endpoint)
+		return store, nil
+	}
+
+	store := storage.New(paths.SitesDir)
+	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
+	logger.Printf("sites:  %s", paths.SitesDir)
+	return store, nil
+}
+
 func run(root cli) error {
 	paths, err := config.ResolvePaths()
 	if err != nil {
@@ -54,9 +87,12 @@ func run(root cli) error {
 		return err
 	}
 
+	if err := cfg.ValidateStorage(); err != nil {
+		return err
+	}
+
 	logger := log.New(os.Stderr, "crated ", log.LstdFlags|log.Lmsgprefix)
 	logger.Printf("config: %s", paths.ConfigFile)
-	logger.Printf("sites:  %s", paths.SitesDir)
 	logger.Printf("listen: %s", cfg.BaseURL)
 
 	tokens, err := token.Load(paths.TokensFile)
@@ -64,10 +100,10 @@ func run(root cli) error {
 		return err
 	}
 
-	store := storage.New(paths.SitesDir)
-	// Cap logical extracted size, not just the HTTP body: a sparse tar can
-	// expand far past its on-wire size.
-	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
+	store, err := openStore(cfg, paths, logger)
+	if err != nil {
+		return err
+	}
 	srv := server.New(cfg, store, tokens, builtin.Sites(), logger)
 	if cfg.IndexTemplate != "" {
 		if err := srv.UseIndexTemplateFile(cfg.IndexTemplate); err != nil {

@@ -213,3 +213,90 @@ func TestResolvePathsHonorsXDG(t *testing.T) {
 		t.Errorf("LogDir suffix: %s", paths.LogDir)
 	}
 }
+
+func TestStorageBackendDefaultsToLocal(t *testing.T) {
+	var cfg Config
+	applyDefaults(&cfg)
+	if cfg.StorageBackend != BackendLocal {
+		t.Errorf("StorageBackend = %q, want %q", cfg.StorageBackend, BackendLocal)
+	}
+	if err := cfg.ValidateStorage(); err != nil {
+		t.Errorf("default config should validate, got %v", err)
+	}
+}
+
+func TestValidateStorage(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{"local needs nothing", Config{StorageBackend: BackendLocal}, false},
+		{"s3 with endpoint and bucket", Config{
+			StorageBackend: BackendS3,
+			S3:             S3Config{Endpoint: "http://localhost:9000", Bucket: "crate"},
+		}, false},
+		{"s3 missing bucket", Config{
+			StorageBackend: BackendS3,
+			S3:             S3Config{Endpoint: "http://localhost:9000"},
+		}, true},
+		{"s3 missing endpoint", Config{
+			StorageBackend: BackendS3,
+			S3:             S3Config{Bucket: "crate"},
+		}, true},
+		{"unknown backend", Config{StorageBackend: "gcs"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.ValidateStorage()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateStorage() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// The S3 backend is meant to run where there is no durable config file, so
+// every S3 setting must be reachable from the environment alone.
+func TestApplyEnvS3(t *testing.T) {
+	t.Setenv(EnvStorageBackend, "s3")
+	t.Setenv(EnvS3Endpoint, "http://rustfs:9000")
+	t.Setenv(EnvS3Bucket, "sites")
+	t.Setenv(EnvS3Region, "us-east-1")
+	t.Setenv(EnvS3AccessKey, "ak")
+	t.Setenv(EnvS3SecretKey, "sk")
+	t.Setenv(EnvS3Prefix, "crate")
+	t.Setenv(EnvS3CacheBytes, "1234")
+
+	var cfg Config
+	applyEnv(&cfg)
+
+	if cfg.StorageBackend != BackendS3 {
+		t.Errorf("StorageBackend = %q", cfg.StorageBackend)
+	}
+	if cfg.S3.Endpoint != "http://rustfs:9000" || cfg.S3.Bucket != "sites" {
+		t.Errorf("endpoint/bucket = %q/%q", cfg.S3.Endpoint, cfg.S3.Bucket)
+	}
+	if cfg.S3.Region != "us-east-1" || cfg.S3.Prefix != "crate" {
+		t.Errorf("region/prefix = %q/%q", cfg.S3.Region, cfg.S3.Prefix)
+	}
+	if cfg.S3.AccessKey != "ak" || cfg.S3.SecretKey != "sk" {
+		t.Errorf("credentials not applied")
+	}
+	if cfg.S3.CacheBytes != 1234 {
+		t.Errorf("CacheBytes = %d, want 1234", cfg.S3.CacheBytes)
+	}
+	if err := cfg.ValidateStorage(); err != nil {
+		t.Errorf("env-only config should validate, got %v", err)
+	}
+}
+
+// An unparseable cache budget is a tuning knob, not a reason to refuse to boot.
+func TestApplyEnvS3CacheBytesIgnoresGarbage(t *testing.T) {
+	t.Setenv(EnvS3CacheBytes, "not-a-number")
+	cfg := Config{S3: S3Config{CacheBytes: 99}}
+	applyEnv(&cfg)
+	if cfg.S3.CacheBytes != 99 {
+		t.Errorf("CacheBytes = %d, want the previous value 99", cfg.S3.CacheBytes)
+	}
+}
