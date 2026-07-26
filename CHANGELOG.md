@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/twistedgrim/crate-html/compare/v0.1.2...v0.1.3) (2026-07-26)
+
+
+### Features
+
+* S3-compatible object storage backend ([#16](https://github.com/twistedgrim/crate-html/issues/16)) ([6631daa](https://github.com/twistedgrim/crate-html/commit/6631daaa32ee76035b03299609cc2d2163a550c2))
+
 ## [0.1.2](https://github.com/twistedgrim/crate-html/compare/v0.1.1...v0.1.2) (2026-07-20)
 
 
