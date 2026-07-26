@@ -55,11 +55,13 @@ services:
       CRATE_S3_ACCESS_KEY: rustfsadmin
       CRATE_S3_SECRET_KEY: rustfsadmin
       CRATE_BASE_URL: http://localhost:7777
-    volumes:
-      # Config still lives on disk: it carries the bearer token, which must
-      # survive a restart. Only site content moves to the bucket.
-      - crate-config:/config
+      # Pin the root token: config.yaml is not persisted here, so without this
+      # every restart would mint a new random one. Named tokens minted through
+      # /api/tokens live in the bucket and need no volume.
+      CRATE_TOKEN: dev-root-token-change-me
+    # No volumes at all. Sites and named tokens are in the bucket, so this
+    # container's filesystem is disposable — `docker compose rm crated` and
+    # start it again, and nothing is lost.
 
 volumes:
   rustfs-data:
-  crate-config:

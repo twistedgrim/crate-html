@@ -45,7 +45,7 @@ func main() {
 //
 // The S3 backend contacts the bucket here so an unreachable endpoint or a
 // missing bucket stops the daemon at startup instead of failing the first push.
-func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (server.Backend, error) {
+func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (server.Backend, token.Persistence, error) {
 	if cfg.StorageBackend == config.BackendS3 {
 		store, err := s3store.New(context.Background(), s3store.Config{
 			Endpoint:     cfg.S3.Endpoint,
@@ -59,16 +59,18 @@ func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (serve
 			CacheBytes:   cfg.S3.CacheBytes,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		logger.Printf("sites:  s3://%s/%s (%s)", cfg.S3.Bucket, cfg.S3.Prefix, cfg.S3.Endpoint)
-		return store, nil
+		// Tokens go in the bucket too, otherwise every restart would mint a
+		// new set and invalidate every client's credentials.
+		return store, store.Document("tokens.yaml"), nil
 	}
 
 	store := storage.New(paths.SitesDir)
 	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
 	logger.Printf("sites:  %s", paths.SitesDir)
-	return store, nil
+	return store, token.FileStore{Path: paths.TokensFile}, nil
 }
 
 func run(root cli) error {
@@ -95,12 +97,12 @@ func run(root cli) error {
 	logger.Printf("config: %s", paths.ConfigFile)
 	logger.Printf("listen: %s", cfg.BaseURL)
 
-	tokens, err := token.Load(paths.TokensFile)
+	store, tokenStore, err := openStore(cfg, paths, logger)
 	if err != nil {
 		return err
 	}
 
-	store, err := openStore(cfg, paths, logger)
+	tokens, err := token.LoadFrom(tokenStore)
 	if err != nil {
 		return err
 	}

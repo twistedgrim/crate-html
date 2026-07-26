@@ -89,9 +89,27 @@ how long it can be stale about *another* replica's writes.
 - **Uploads are buffered in memory.** The archive must be validated before
   anything is written, and there is no scratch disk to stage it on. The existing
   `max_upload_bytes` cap bounds this.
-- **Tokens still live on local disk.** Until the token store moves behind the
-  same backend, "no local storage" is not yet literally true — `/config` remains
-  stateful.
+- **The root token must come from the environment.** `CRATE_TOKEN` is the only
+  way to pin it on a host with no durable config file; without it, a restart
+  generates a fresh random root token.
+
+## The token store
+
+Named API tokens would otherwise be the remaining piece of local state, and a
+restart that silently invalidates every client's credentials is worse than one
+that loses a site. `token.Persistence` abstracts where the token document lives:
+a file by default, a bucket object under `state/` when the S3 backend is
+selected.
+
+Unlike sites, the token document is read-modify-write, and the whole set lives
+in each process's memory. Two replicas doing a blind overwrite would delete
+tokens the other had just minted. Writes are therefore compare-and-swap: each
+save is conditioned, via S3 conditional writes, on the object version that
+process last read, and a stale writer gets `ErrConflict` rather than winning.
+Verified end-to-end — rustfs answers a stale `If-Match` with 412.
+
+Servers that ignore conditional headers degrade to last-write-wins, which is the
+behavior crate had before this existed.
 
 ## Configuration
 
@@ -117,7 +135,8 @@ is mechanical.
 ## Status
 
 Implemented: the `Backend` seam, the S3 backend, the bounded cache, config and
-env wiring, and rustfs-backed end-to-end tests.
+env wiring, the token store behind the same backend, and rustfs-backed
+end-to-end tests.
 
-Not done: moving the token store off local disk (see above), and any
-cross-replica coordination for expiry.
+Not done: cross-replica coordination for expiry, and moving the root token out
+of `config.yaml` (it is settable by environment, which is enough in practice).

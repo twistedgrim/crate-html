@@ -179,14 +179,21 @@ For a local stack (rustfs + a crated with **no `/data` volume**, which is the
 point) see [`../examples/docker-compose.rustfs.yml`](../examples/docker-compose.rustfs.yml)
 or run `task rustfs:up`.
 
+Sites *and* named API tokens both move to the bucket, so a restart keeps serving
+the same content and keeps accepting the same credentials.
+
 Two things to know before running this in anger:
 
-- **Config is still on disk.** `/config` holds the bearer token, which has to
-  survive a restart. Only site content moves to the bucket.
+- **Set `CRATE_TOKEN`.** The root token still comes from `config.yaml`, so on a
+  host with no durable config file every restart would otherwise mint a new
+  random one. Named tokens minted through `/api/tokens` are unaffected — they
+  live in the bucket.
 - **Multiple replicas go eventually consistent.** A push handled by one replica
   becomes visible to the others within about ten seconds. Expiry also runs
-  independently in every replica. Pin to one replica if you want the same
-  behavior as the local backend.
+  independently in every replica. Token writes are compare-and-swap, so a
+  concurrent mint fails loudly rather than silently dropping the other
+  replica's tokens. Pin to one replica if you want the same behavior as the
+  local backend.
 
 The design and its tradeoffs are written up in
 [`plans/object-storage-backend.md`](./plans/object-storage-backend.md).

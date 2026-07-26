@@ -5,6 +5,8 @@ package smoke
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Twistedgrim/crate-html/internal/s3store"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -397,5 +400,133 @@ func TestS3BackendExpiry(t *testing.T) {
 	}
 	if code, body := getBody(t, url2+"/s3-durable/"); code != http.StatusOK || !strings.Contains(body, "durable") {
 		t.Errorf("non-expiring site = %d %q, want it retained", code, body)
+	}
+}
+
+// TestS3BackendTokensSurviveRestart is the other half of statelessness: a
+// minted token has to keep working across a restart with a fresh XDG home. If
+// tokens stayed on local disk, every restart would silently invalidate every
+// client's credentials.
+func TestS3BackendTokensSurviveRestart(t *testing.T) {
+	env := ensureS3(t)
+	url, stop := startS3Daemon(t, env)
+
+	// Mint through the API using the root token.
+	body := `{"name":"s3-persisted-token"}`
+	req, err := http.NewRequest(http.MethodPost, url+"/api/tokens", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+suiteToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("mint token = %d: %s", resp.StatusCode, raw)
+	}
+	var minted struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(raw, &minted); err != nil || minted.Token == "" {
+		t.Fatalf("no token in response %s (%v)", raw, err)
+	}
+
+	// Restart onto a brand-new XDG home: nothing local carries over.
+	stop()
+	url2, _ := startS3Daemon(t, env)
+
+	// The minted token must still authenticate a push.
+	tarball := tarFromMap(t, map[string]string{"index.html": "<h1>token survived</h1>"})
+	pushReq, err := http.NewRequest(http.MethodPut, url2+"/api/sites/s3-token-check", bytes.NewReader(tarball))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushReq.Header.Set("Authorization", "Bearer "+minted.Token)
+	pushResp, err := http.DefaultClient.Do(pushReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pushResp.Body.Close()
+	if pushResp.StatusCode != http.StatusOK {
+		out, _ := io.ReadAll(pushResp.Body)
+		t.Fatalf("push with pre-restart token = %d: %s", pushResp.StatusCode, out)
+	}
+
+	// And it should still be listed.
+	listReq, _ := http.NewRequest(http.MethodGet, url2+"/api/tokens", nil)
+	listReq.Header.Set("Authorization", "Bearer "+suiteToken)
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	listBody, _ := io.ReadAll(listResp.Body)
+	if !strings.Contains(string(listBody), "s3-persisted-token") {
+		t.Errorf("token missing from listing after restart: %s", listBody)
+	}
+}
+
+// TestS3DocumentCompareAndSwap pins the concurrency guarantee behind the token
+// store. Two daemons sharing a bucket both hold the whole token set in memory,
+// so a blind overwrite would delete tokens the other had just minted. Writes
+// are therefore conditioned on the version last read, and the loser is told so.
+func TestS3DocumentCompareAndSwap(t *testing.T) {
+	env := ensureS3(t)
+	store, err := s3store.New(context.Background(), s3store.Config{
+		Endpoint:  "http://" + env.endpoint,
+		Bucket:    s3Bucket,
+		AccessKey: env.accessKey,
+		SecretKey: env.secretKey,
+	})
+	if err != nil {
+		t.Fatalf("s3store.New: %v", err)
+	}
+
+	// Two independent handles on one key: two replicas of the daemon.
+	a := store.Document("cas-test.yaml")
+	b := store.Document("cas-test.yaml")
+
+	// Both observe the same (absent) starting state.
+	for _, d := range []*s3store.Document{a, b} {
+		got, err := d.Load()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got != nil {
+			t.Fatalf("expected an absent document, got %q", got)
+		}
+	}
+
+	if err := a.Save([]byte("first")); err != nil {
+		t.Fatalf("first writer should succeed: %v", err)
+	}
+	// b is still working from the pre-write state, so its write must be refused
+	// rather than discarding a's.
+	if err := b.Save([]byte("second")); !errors.Is(err, s3store.ErrConflict) {
+		t.Fatalf("stale writer error = %v, want ErrConflict", err)
+	}
+
+	// a still holds the current version and may continue.
+	if err := a.Save([]byte("third")); err != nil {
+		t.Fatalf("current writer should still succeed: %v", err)
+	}
+	// Re-reading re-syncs b, which can then write.
+	if _, err := b.Load(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := b.Save([]byte("fourth")); err != nil {
+		t.Fatalf("writer should succeed after reloading: %v", err)
+	}
+
+	got, err := a.Load()
+	if err != nil {
+		t.Fatalf("final load: %v", err)
+	}
+	if string(got) != "fourth" {
+		t.Errorf("final contents = %q, want %q", got, "fourth")
 	}
 }

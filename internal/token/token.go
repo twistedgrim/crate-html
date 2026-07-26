@@ -70,26 +70,68 @@ type fileShape struct {
 	Tokens []Record `yaml:"tokens"`
 }
 
-// Store is the daemon-side token set, backed by a yaml file. All methods are
-// safe for concurrent use.
+// Persistence is where the serialized token document lives. It exists so the
+// token set can be kept somewhere other than local disk — a daemon running
+// without a writable volume still needs its tokens to survive a restart.
+//
+// Load returns nil with a nil error when nothing has been stored yet.
+// Implementations are responsible for making Save atomic: a partially written
+// document would lock every client out.
+type Persistence interface {
+	Load() ([]byte, error)
+	Save(data []byte) error
+}
+
+// FileStore persists the token document to a local file.
+type FileStore struct{ Path string }
+
+// Load implements Persistence, reporting a missing file as empty.
+func (f FileStore) Load() ([]byte, error) {
+	data, err := os.ReadFile(f.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return data, err
+}
+
+// Save implements Persistence, writing through a temp file and renaming so a
+// reader never observes a half-written document.
+func (f FileStore) Save(data []byte) error {
+	tmp := f.Path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write tokens: %w", err)
+	}
+	if err := os.Rename(tmp, f.Path); err != nil {
+		return fmt.Errorf("install tokens: %w", err)
+	}
+	return nil
+}
+
+// Store is the daemon-side token set. All methods are safe for concurrent use.
 type Store struct {
-	path string
+	store Persistence
 
 	mu        sync.Mutex
 	recs      []Record
 	lastSaved map[string]time.Time // id → last_used_at value most recently persisted
 }
 
-// Load reads the store at path. A missing file yields an empty store; the
-// file is created on first mutation.
+// Load reads the token store from a local file at path. It is shorthand for
+// LoadFrom(FileStore{path}).
 func Load(path string) (*Store, error) {
-	s := &Store{path: path, lastSaved: make(map[string]time.Time)}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
+	return LoadFrom(FileStore{Path: path})
+}
+
+// LoadFrom reads the token store from any Persistence. Nothing stored yet
+// yields an empty store, which is written out on first mutation.
+func LoadFrom(p Persistence) (*Store, error) {
+	s := &Store{store: p, lastSaved: make(map[string]time.Time)}
+	data, err := p.Load()
 	if err != nil {
 		return nil, fmt.Errorf("read tokens: %w", err)
+	}
+	if len(data) == 0 {
+		return s, nil
 	}
 	var f fileShape
 	if err := yaml.Unmarshal(data, &f); err != nil {
@@ -263,14 +305,7 @@ func (s *Store) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("marshal tokens: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return fmt.Errorf("write tokens: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("install tokens: %w", err)
-	}
-	return nil
+	return s.store.Save(out)
 }
 
 func hashSecret(secret string) string {
