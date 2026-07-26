@@ -72,6 +72,24 @@ func (s *Store) Path(name string) (string, error) {
 	return filepath.Join(s.root, name), nil
 }
 
+// Open returns the site's content as an fs.FS rooted at the site directory.
+// This is the read path the HTTP layer serves from; returning an fs.FS rather
+// than a filesystem path is what lets a non-disk backend (object storage, an
+// in-memory cache) satisfy the same contract. Returns ErrNotFound if the site
+// does not exist.
+func (s *Store) Open(name string) (fs.FS, error) {
+	p, err := s.Path(name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	return os.DirFS(p), nil
+}
+
 // Exists reports whether the site directory exists.
 func (s *Store) Exists(name string) (bool, error) {
 	p, err := s.Path(name)
