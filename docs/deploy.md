@@ -1,12 +1,13 @@
 # Deploying crate-html
 
-Three deployment shapes, in order of escalation:
+Four deployment shapes, in order of escalation:
 
 1. [Local foreground](#1-local-foreground-laptop) — `./bin/crated` in a terminal.
 2. [Docker](#2-docker-persistent-daemon) — `task docker:up`, persistent across terminal sessions.
 3. [Docker + tsdproxy on Tailscale](#3-docker--tsdproxy-on-tailscale-https-on-your-tailnet) — HTTPS, accessible from any tailnet device.
+4. [Object storage](#4-object-storage-no-writable-volume) — sites in an S3-compatible bucket, for hosts with no writable volume.
 
-All three serve the same HTTP API; the differences are *who can reach the daemon* and *who owns the lifecycle*. crate-html itself stays HTTP-only — TLS, hostnames, and remote access are layered above it.
+All four serve the same HTTP API; the first three differ in *who can reach the daemon* and *who owns the lifecycle*, while the fourth changes *where sites live*. crate-html itself stays HTTP-only — TLS, hostnames, and remote access are layered above it.
 
 ## 1. Local foreground (laptop)
 
@@ -149,3 +150,43 @@ This gives you TLS, vhost routing, and optional IP-allowlisting without changing
 ## Kubernetes
 
 Out of scope for v0, but the shape is clean: package the existing image, mount the same `/config` and `/data` volumes as `PersistentVolumeClaim`s, expose with a Gateway-API `HTTPRoute`. The Gateway controller handles TLS the same way tsdproxy does. A reference manifest will land alongside the Helm/kustomize work in [`roadmap.md`](roadmap.md).
+
+## 4. Object storage (no writable volume)
+
+Where there is no PVC to mount — an ephemeral container filesystem, a serverless
+runtime, a node pool without persistent storage — sites can live in an
+S3-compatible bucket instead of on disk:
+
+```bash
+CRATE_STORAGE_BACKEND=s3 \
+CRATE_S3_ENDPOINT=https://s3.example.com \
+CRATE_S3_BUCKET=crate \
+CRATE_S3_ACCESS_KEY=... \
+CRATE_S3_SECRET_KEY=... \
+crated
+```
+
+Everything is settable by environment variable because the whole point is
+running without a durable config file. Leaving the credentials empty falls back
+to the standard AWS credential chain, so under an IAM role there are no secrets
+to supply at all. Works with AWS S3, Cloudflare R2, MinIO, rustfs, or anything
+else speaking the S3 API.
+
+The bucket must already exist — crated never creates it, so a typo fails loudly
+at startup instead of silently starting with an empty one.
+
+For a local stack (rustfs + a crated with **no `/data` volume**, which is the
+point) see [`../examples/docker-compose.rustfs.yml`](../examples/docker-compose.rustfs.yml)
+or run `task rustfs:up`.
+
+Two things to know before running this in anger:
+
+- **Config is still on disk.** `/config` holds the bearer token, which has to
+  survive a restart. Only site content moves to the bucket.
+- **Multiple replicas go eventually consistent.** A push handled by one replica
+  becomes visible to the others within about ten seconds. Expiry also runs
+  independently in every replica. Pin to one replica if you want the same
+  behavior as the local backend.
+
+The design and its tradeoffs are written up in
+[`plans/object-storage-backend.md`](./plans/object-storage-backend.md).
