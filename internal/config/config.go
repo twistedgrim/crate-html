@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/adrg/xdg"
 	"gopkg.in/yaml.v3"
@@ -40,6 +42,25 @@ const (
 	EnvBaseURL       = "CRATE_BASE_URL"
 	EnvToken         = "CRATE_TOKEN"
 	EnvIndexTemplate = "CRATE_INDEX_TEMPLATE"
+
+	// Storage backend selection and S3 settings. These are env-first by
+	// design: the whole point of the S3 backend is running where there is no
+	// durable config file to read, so a deployment must be able to configure
+	// storage entirely from the environment.
+	EnvStorageBackend = "CRATE_STORAGE_BACKEND"
+	EnvS3Endpoint     = "CRATE_S3_ENDPOINT"
+	EnvS3Bucket       = "CRATE_S3_BUCKET"
+	EnvS3Region       = "CRATE_S3_REGION"
+	EnvS3AccessKey    = "CRATE_S3_ACCESS_KEY"
+	EnvS3SecretKey    = "CRATE_S3_SECRET_KEY"
+	EnvS3Prefix       = "CRATE_S3_PREFIX"
+	EnvS3CacheBytes   = "CRATE_S3_CACHE_BYTES"
+)
+
+// Storage backend identifiers for Config.StorageBackend.
+const (
+	BackendLocal = "local"
+	BackendS3    = "s3"
 )
 
 // Config is the on-disk shape of config.yaml.
@@ -62,6 +83,34 @@ type Config struct {
 	// Operator-supplied (config + filesystem access), never pushed over the
 	// API.
 	IndexTemplate string `yaml:"index_template"`
+	// StorageBackend selects where sites live: "local" (the default) keeps
+	// them in SitesDir, "s3" keeps them in an S3-compatible bucket.
+	StorageBackend string `yaml:"storage_backend"`
+	// S3 configures the object-storage backend. Ignored unless StorageBackend
+	// is "s3".
+	S3 S3Config `yaml:"s3"`
+}
+
+// S3Config describes the bucket backing the "s3" storage backend.
+type S3Config struct {
+	// Endpoint is the S3 host, with or without a scheme. A bare host defaults
+	// to https; use an http:// prefix for a plaintext dev endpoint.
+	Endpoint string `yaml:"endpoint"`
+	// Bucket must already exist — the daemon never creates it, so it cannot
+	// mask a typo by silently making a new bucket.
+	Bucket string `yaml:"bucket"`
+	// Region is optional for most S3-compatible servers.
+	Region string `yaml:"region"`
+	// AccessKey and SecretKey are usually supplied by env rather than written
+	// to disk. When both are empty the standard AWS credential chain is used,
+	// which is what lets this run under an IAM role with no secrets at all.
+	AccessKey string `yaml:"access_key"`
+	SecretKey string `yaml:"secret_key"`
+	// Prefix scopes every key, so one bucket can host multiple deployments.
+	Prefix string `yaml:"prefix"`
+	// CacheBytes budgets the in-memory site cache. 0 selects the built-in
+	// default; a negative value disables caching entirely.
+	CacheBytes int64 `yaml:"cache_bytes"`
 }
 
 // Paths bundles the resolved on-disk locations used by both binaries.
@@ -169,6 +218,33 @@ func applyDefaults(cfg *Config) {
 	if cfg.MaxUploadBytes <= 0 {
 		cfg.MaxUploadBytes = defaultMaxUploadBytes
 	}
+	if cfg.StorageBackend == "" {
+		cfg.StorageBackend = BackendLocal
+	}
+}
+
+// ValidateStorage checks the storage settings are coherent before anything
+// tries to use them, so a misconfiguration surfaces at startup with a clear
+// message instead of on the first push.
+func (c Config) ValidateStorage() error {
+	switch c.StorageBackend {
+	case BackendLocal:
+		return nil
+	case BackendS3:
+		var missing []string
+		if c.S3.Endpoint == "" {
+			missing = append(missing, EnvS3Endpoint+" (s3.endpoint)")
+		}
+		if c.S3.Bucket == "" {
+			missing = append(missing, EnvS3Bucket+" (s3.bucket)")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("storage_backend %q requires %s", BackendS3, strings.Join(missing, ", "))
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown storage_backend %q (want %q or %q)", c.StorageBackend, BackendLocal, BackendS3)
+	}
 }
 
 func applyEnv(cfg *Config) {
@@ -183,6 +259,34 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvIndexTemplate); v != "" {
 		cfg.IndexTemplate = v
+	}
+	if v := os.Getenv(EnvStorageBackend); v != "" {
+		cfg.StorageBackend = v
+	}
+	if v := os.Getenv(EnvS3Endpoint); v != "" {
+		cfg.S3.Endpoint = v
+	}
+	if v := os.Getenv(EnvS3Bucket); v != "" {
+		cfg.S3.Bucket = v
+	}
+	if v := os.Getenv(EnvS3Region); v != "" {
+		cfg.S3.Region = v
+	}
+	if v := os.Getenv(EnvS3AccessKey); v != "" {
+		cfg.S3.AccessKey = v
+	}
+	if v := os.Getenv(EnvS3SecretKey); v != "" {
+		cfg.S3.SecretKey = v
+	}
+	if v := os.Getenv(EnvS3Prefix); v != "" {
+		cfg.S3.Prefix = v
+	}
+	if v := os.Getenv(EnvS3CacheBytes); v != "" {
+		// Ignore an unparseable value rather than failing startup: the
+		// built-in default is a safe fallback and this is a tuning knob.
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.S3.CacheBytes = n
+		}
 	}
 }
 

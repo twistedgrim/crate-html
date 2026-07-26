@@ -1,12 +1,13 @@
 # Deploying crate-html
 
-Three deployment shapes, in order of escalation:
+Four deployment shapes, in order of escalation:
 
 1. [Local foreground](#1-local-foreground-laptop) — `./bin/crated` in a terminal.
 2. [Docker](#2-docker-persistent-daemon) — `task docker:up`, persistent across terminal sessions.
 3. [Docker + tsdproxy on Tailscale](#3-docker--tsdproxy-on-tailscale-https-on-your-tailnet) — HTTPS, accessible from any tailnet device.
+4. [Object storage](#4-object-storage-no-writable-volume) — sites in an S3-compatible bucket, for hosts with no writable volume.
 
-All three serve the same HTTP API; the differences are *who can reach the daemon* and *who owns the lifecycle*. crate-html itself stays HTTP-only — TLS, hostnames, and remote access are layered above it.
+All four serve the same HTTP API; the first three differ in *who can reach the daemon* and *who owns the lifecycle*, while the fourth changes *where sites live*. crate-html itself stays HTTP-only — TLS, hostnames, and remote access are layered above it.
 
 ## 1. Local foreground (laptop)
 
@@ -149,3 +150,76 @@ This gives you TLS, vhost routing, and optional IP-allowlisting without changing
 ## Kubernetes
 
 Out of scope for v0, but the shape is clean: package the existing image, mount the same `/config` and `/data` volumes as `PersistentVolumeClaim`s, expose with a Gateway-API `HTTPRoute`. The Gateway controller handles TLS the same way tsdproxy does. A reference manifest will land alongside the Helm/kustomize work in [`roadmap.md`](roadmap.md).
+
+## 4. Object storage (no writable volume)
+
+Where there is no PVC to mount — an ephemeral container filesystem, a serverless
+runtime, a node pool without persistent storage — sites can live in an
+S3-compatible bucket instead of on disk:
+
+```bash
+CRATE_STORAGE_BACKEND=s3 \
+CRATE_S3_ENDPOINT=https://s3.example.com \
+CRATE_S3_BUCKET=crate \
+CRATE_S3_ACCESS_KEY=... \
+CRATE_S3_SECRET_KEY=... \
+crated
+```
+
+Everything is settable by environment variable because the whole point is
+running without a durable config file. Leaving the credentials empty falls back
+to the standard AWS credential chain, so under an IAM role there are no secrets
+to supply at all. Works with AWS S3, Cloudflare R2, MinIO, rustfs, or anything
+else speaking the S3 API.
+
+The bucket must already exist — crated never creates it, so a typo fails loudly
+at startup instead of silently starting with an empty one.
+
+For a local stack (rustfs + a crated with **no `/data` volume**, which is the
+point) see [`../examples/docker-compose.rustfs.yml`](../examples/docker-compose.rustfs.yml)
+or run `task rustfs:up`.
+
+Sites *and* named API tokens both move to the bucket, so a restart keeps serving
+the same content and keeps accepting the same credentials.
+
+### Hybrid: bucket for content, small volume for config
+
+Selecting the S3 backend does not force you to give up a volume entirely. What
+moves to the bucket and what stays local are separate questions:
+
+| | Sites | Named tokens | Root token | Volumes |
+|---|---|---|---|---|
+| Local (default) | disk | disk | `config.yaml` | `/config` + `/data` |
+| **Hybrid** | bucket | bucket | `config.yaml` | `/config` only |
+| Stateless | bucket | bucket | `CRATE_TOKEN` | none |
+
+**Hybrid is what most deployments want.** Mount a small `/config` volume, omit
+`CRATE_TOKEN`, and the root token is generated once and persists exactly as it
+does today — bucket-backed content without a secret to manage. Go fully
+stateless only when you cannot mount anything at all.
+
+Confirm which backend is live from the startup log, which prints the bucket
+instead of a directory:
+
+```
+crated sites:  s3://crate/ (https://s3.example.com)
+```
+
+### Before running this in anger
+
+- **Set `CRATE_TOKEN` if `/config` is not persisted.** The root token still
+  comes from `config.yaml`; without a durable `/config` and without this env var
+  every restart mints a new random one and invalidates whatever your clients
+  were using. Named tokens are unaffected — they live in the bucket.
+- **Multiple replicas go eventually consistent.** A push handled by one replica
+  becomes visible to the others within about ten seconds. Expiry also runs
+  independently in every replica. Token writes are compare-and-swap, so a
+  concurrent mint fails loudly rather than silently dropping the other
+  replica's tokens. Pin to one replica if you want the same behavior as the
+  local backend.
+
+Full operator reference — permissions, every setting, bucket layout, and the
+rest of the gotchas — is in [`s3-storage.md`](./s3-storage.md).
+
+The design and its tradeoffs are written up in
+[`plans/object-storage-backend.md`](./plans/object-storage-backend.md).

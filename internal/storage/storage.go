@@ -64,12 +64,46 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// SafeTarPath cleans a tar entry name and rejects anything that would escape
+// the site root. It is the single definition of that rule, shared by every
+// backend that unpacks an uploaded archive — a second copy of this check is a
+// second place for a traversal bug to hide.
+//
+// filepath.Clean already resolves any embedded "/../"; we only need to make
+// sure the cleaned path doesn't start at "..", "../...", or "/...". Names that
+// merely begin with two dots (e.g. "..foo") are valid filenames.
+func SafeTarPath(name string) (string, error) {
+	clean := filepath.Clean(name)
+	if clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+		return "", fmt.Errorf("%w: %s", ErrUnsafePath, name)
+	}
+	return clean, nil
+}
+
 // Path returns the on-disk directory for a site (whether it exists or not).
 func (s *Store) Path(name string) (string, error) {
 	if err := ValidateName(name); err != nil {
 		return "", err
 	}
 	return filepath.Join(s.root, name), nil
+}
+
+// Open returns the site's content as an fs.FS rooted at the site directory.
+// This is the read path the HTTP layer serves from; returning an fs.FS rather
+// than a filesystem path is what lets a non-disk backend (object storage, an
+// in-memory cache) satisfy the same contract. Returns ErrNotFound if the site
+// does not exist.
+func (s *Store) Open(name string) (fs.FS, error) {
+	p, err := s.Path(name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	return os.DirFS(p), nil
 }
 
 // Exists reports whether the site directory exists.
@@ -360,13 +394,9 @@ func extractTar(dst string, r io.Reader, limit int64) error {
 		if err != nil {
 			return fmt.Errorf("tar read: %w", err)
 		}
-		clean := filepath.Clean(hdr.Name)
-		// Reject the path if it escapes the destination root. filepath.Clean
-		// already resolves any embedded "/../"; we only need to make sure the
-		// cleaned path doesn't start at "..", "../...", or "/...". Names that
-		// merely *begin* with two dots (e.g. "..foo") are valid filenames.
-		if clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
-			return fmt.Errorf("%w: %s", ErrUnsafePath, hdr.Name)
+		clean, err := SafeTarPath(hdr.Name)
+		if err != nil {
+			return err
 		}
 		target := filepath.Join(dst, clean)
 		switch hdr.Typeflag {

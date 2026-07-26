@@ -48,7 +48,7 @@ const defaultExpiry = 24 * time.Hour
 
 // Server bundles the HTTP handlers.
 type Server struct {
-	store     *storage.Store
+	store     Backend
 	tokens    *token.Store
 	cfg       config.Config
 	log       *log.Logger
@@ -59,7 +59,7 @@ type Server struct {
 
 // New returns a Server. Pass nil for builtins to skip embedded sites and nil
 // for tokens to accept only the root config token.
-func New(cfg config.Config, store *storage.Store, tokens *token.Store, builtins []builtin.Site, logger *log.Logger) *Server {
+func New(cfg config.Config, store Backend, tokens *token.Store, builtins []builtin.Site, logger *log.Logger) *Server {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -385,16 +385,26 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Disk first.
+	// Stored sites first.
 	exists, err := s.store.Exists(name)
 	if err == nil && exists {
-		s.serveDisk(w, r, name, parts)
+		fsys, oerr := s.store.Open(name)
+		if oerr != nil {
+			if errors.Is(oerr, storage.ErrNotFound) {
+				http.NotFound(w, r) // deleted between Exists and Open
+				return
+			}
+			s.log.Printf("open site %s: %v", name, oerr)
+			writeError(w, http.StatusInternalServerError, "open site failed")
+			return
+		}
+		s.serveSite(w, r, name, fsys, parts)
 		return
 	}
 
 	// Then builtin.
 	if site, ok := s.findBuiltin(name); ok {
-		s.serveBuiltin(w, r, site, parts)
+		s.serveSite(w, r, site.Name, site.FS, parts)
 		return
 	}
 
@@ -438,12 +448,10 @@ func (s *Server) hasGroupChildren(prefix string) bool {
 	return false
 }
 
-func (s *Server) serveDisk(w http.ResponseWriter, r *http.Request, name string, parts []string) {
-	siteDir, err := s.store.Path(name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
+// serveSite serves one file out of a site's fs.FS. Stored sites and embedded
+// built-ins share this path — a site is just a name plus an fs.FS, wherever
+// its bytes came from.
+func (s *Server) serveSite(w http.ResponseWriter, r *http.Request, name string, fsys fs.FS, parts []string) {
 	if len(parts) == 1 {
 		http.Redirect(w, r, "/"+name+"/", http.StatusFound)
 		return
@@ -452,21 +460,10 @@ func (s *Server) serveDisk(w http.ResponseWriter, r *http.Request, name string, 
 	if rest == "" || strings.HasSuffix(rest, "/") {
 		rest = path.Join(rest, "index.html")
 	}
-	cleaned := path.Clean("/" + rest)
-	http.ServeFile(w, r, siteDir+cleaned)
-}
-
-func (s *Server) serveBuiltin(w http.ResponseWriter, r *http.Request, site builtin.Site, parts []string) {
-	if len(parts) == 1 {
-		http.Redirect(w, r, "/"+site.Name+"/", http.StatusFound)
-		return
-	}
-	rest := parts[1]
-	if rest == "" || strings.HasSuffix(rest, "/") {
-		rest = path.Join(rest, "index.html")
-	}
+	// fs.FS paths are unrooted, so Clean against "/" to collapse any traversal
+	// and then drop the leading separator.
 	cleaned := strings.TrimPrefix(path.Clean("/"+rest), "/")
-	http.ServeFileFS(w, r, site.FS, cleaned)
+	http.ServeFileFS(w, r, fsys, cleaned)
 }
 
 func (s *Server) findBuiltin(name string) (builtin.Site, bool) {

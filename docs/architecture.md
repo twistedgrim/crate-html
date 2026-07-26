@@ -121,6 +121,12 @@ Site uploads are capped by `max_upload_bytes` (default 100 MiB); oversized pushe
 
 Sites are plain directories on disk. No database. `readdir` is the site index; `os.Rename` is the transaction.
 
+The daemon reaches storage through a `Backend` interface whose read path is
+`Open(name) (fs.FS, error)`, so disk sites, embedded built-ins, and object
+storage all serve through one `http.ServeFileFS` path. `storage_backend: s3`
+selects the object-storage backend instead, for running where there is no
+writable volume — see [`plans/object-storage-backend.md`](./plans/object-storage-backend.md).
+
 New pushes expire after 24 hours by default. `crate push --expires <duration>`
 sets another lifetime and `--expires never` opts out using the same flag. The
 CLI sends the policy in `X-Crate-Expires`; the daemon persists the absolute

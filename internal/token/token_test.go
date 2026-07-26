@@ -208,3 +208,98 @@ func mustRead(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// memPersistence is an in-memory Persistence for exercising the seam without
+// touching disk.
+type memPersistence struct {
+	data    []byte
+	saves   int
+	saveErr error
+	loadErr error
+}
+
+func (m *memPersistence) Load() ([]byte, error) {
+	if m.loadErr != nil {
+		return nil, m.loadErr
+	}
+	return m.data, nil
+}
+
+func (m *memPersistence) Save(data []byte) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	m.data = append([]byte(nil), data...)
+	m.saves++
+	return nil
+}
+
+// The token set must round-trip through any Persistence, not just a file —
+// that is what lets it live in a bucket.
+func TestLoadFromRoundTrips(t *testing.T) {
+	p := &memPersistence{}
+	s, err := LoadFrom(p)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if _, _, err := s.Create("ci", nil, time.Now()); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if p.saves == 0 {
+		t.Fatal("Create did not persist")
+	}
+
+	// A fresh store over the same bytes sees the same token.
+	s2, err := LoadFrom(p)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	recs := s2.List()
+	if len(recs) != 1 || recs[0].Name != "ci" {
+		t.Fatalf("reloaded records = %+v, want one named ci", recs)
+	}
+}
+
+// A failed write must leave memory matching what was stored, or a restart
+// would disagree with what the caller was told.
+func TestCreateRollsBackWhenPersistenceFails(t *testing.T) {
+	p := &memPersistence{saveErr: errors.New("bucket unavailable")}
+	s, err := LoadFrom(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Create("doomed", nil, time.Now()); err == nil {
+		t.Fatal("Create should fail when the store cannot be written")
+	}
+	if got := s.List(); len(got) != 0 {
+		t.Errorf("records = %+v, want none after a failed save", got)
+	}
+}
+
+func TestLoadFromSurfacesLoadErrors(t *testing.T) {
+	p := &memPersistence{loadErr: errors.New("no credentials")}
+	if _, err := LoadFrom(p); err == nil {
+		t.Fatal("LoadFrom should surface a load failure")
+	}
+}
+
+// FileStore is still the default and must behave as before.
+func TestFileStoreRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.yaml")
+	f := FileStore{Path: path}
+
+	got, err := f.Load()
+	if err != nil || got != nil {
+		t.Fatalf("missing file should load as empty, got %q / %v", got, err)
+	}
+	if err := f.Save([]byte("tokens: []\n")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err = f.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if string(got) != "tokens: []\n" {
+		t.Errorf("round-tripped %q", got)
+	}
+}
