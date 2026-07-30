@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/twistedgrim/crate-html/compare/v0.1.3...v0.1.4) (2026-07-30)
+
+
+### Features
+
+* separate broker and web runtime roles ([#18](https://github.com/twistedgrim/crate-html/issues/18)) ([8167f8b](https://github.com/twistedgrim/crate-html/commit/8167f8b41722d031b14fe8e7d7b5eb12307f0c5f))
+
 ## [0.1.3](https://github.com/twistedgrim/crate-html/compare/v0.1.2...v0.1.3) (2026-07-26)
 
 
