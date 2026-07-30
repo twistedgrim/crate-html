@@ -4,14 +4,18 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -88,6 +92,133 @@ func TestStatusIsPublic(t *testing.T) {
 	resp, _ := http.Get(ts.URL + wire.PathAPIStatus)
 	if resp.StatusCode != 200 {
 		t.Errorf("GET %s: %d, want 200", wire.PathAPIStatus, resp.StatusCode)
+	}
+}
+
+func TestRoleHandlerRouteBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		role       string
+		wantPublic int
+		wantAPI    int
+	}{
+		{role: "all", wantPublic: http.StatusOK, wantAPI: http.StatusOK},
+		{role: "broker", wantPublic: http.StatusNotFound, wantAPI: http.StatusOK},
+		{role: "web", wantPublic: http.StatusOK, wantAPI: http.StatusNotFound},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			root := t.TempDir()
+			store := storage.New(root)
+			tokens, err := token.Load(filepath.Join(t.TempDir(), "tokens.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Config{
+				BaseURL:        "http://legacy.invalid",
+				PublicURL:      "https://crate.example",
+				Token:          testToken,
+				MaxUploadBytes: 1 << 20,
+			}
+			logger := log.New(io.Discard, "", 0)
+			var srv *server.Server
+			var handler http.Handler
+			switch tc.role {
+			case "web":
+				srv = server.NewReadOnly(cfg, store, nil, logger)
+				handler = srv.PublicHandler()
+			case "broker":
+				srv = server.New(cfg, store, tokens, nil, logger)
+				handler = srv.BrokerHandler()
+			default:
+				srv = server.New(cfg, store, tokens, nil, logger)
+				handler = srv.Handler()
+			}
+			ts := httptest.NewServer(handler)
+			defer ts.Close()
+
+			resp, err := http.Get(ts.URL + "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.wantPublic {
+				t.Errorf("GET /: got %d, want %d", resp.StatusCode, tc.wantPublic)
+			}
+
+			resp, err = http.Get(ts.URL + wire.PathAPIStatus)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.wantAPI {
+				t.Errorf("GET %s: got %d, want %d", wire.PathAPIStatus, resp.StatusCode, tc.wantAPI)
+			}
+
+			var tarbuf bytes.Buffer
+			tw := tar.NewWriter(&tarbuf)
+			_ = tw.WriteHeader(&tar.Header{Name: "index.html", Mode: 0o644, Size: 2})
+			_, _ = tw.Write([]byte("ok"))
+			_ = tw.Close()
+			req, _ := http.NewRequest(http.MethodPut, ts.URL+wire.PathAPISites+"/role-write", &tarbuf)
+			req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+			resp, err = http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.wantAPI {
+				t.Errorf("PUT %s: got %d, want %d", wire.PathAPISites, resp.StatusCode, tc.wantAPI)
+			}
+
+			resp, err = http.Get(ts.URL + "/healthz")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("GET /healthz: got %d, want 200", resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestPublicHandlerHidesExpiredSitesAndIndexRows(t *testing.T) {
+	root := t.TempDir()
+	store := storage.New(root)
+	expiry := time.Millisecond
+	var tarbuf bytes.Buffer
+	tw := tar.NewWriter(&tarbuf)
+	_ = tw.WriteHeader(&tar.Header{Name: "index.html", Mode: 0o644, Size: 7})
+	_, _ = tw.Write([]byte("expired"))
+	_ = tw.Close()
+	if _, err := store.ReplaceFromTarWithExpiry("expired", &tarbuf, &expiry); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+
+	srv := server.NewReadOnly(config.Config{}, store, nil, log.New(io.Discard, "", 0))
+	ts := httptest.NewServer(srv.PublicHandler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/expired/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expired site status = %d, want 404", resp.StatusCode)
+	}
+	resp, err = http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if strings.Contains(string(body), "/expired/") {
+		t.Fatal("expired site remained on public index")
+	}
+	exists, err := store.Exists("expired")
+	if err != nil || !exists {
+		t.Fatalf("read-time expiry enforcement deleted storage: exists=%v err=%v", exists, err)
 	}
 }
 
@@ -280,6 +411,48 @@ func TestPutSiteHappyPath(t *testing.T) {
 	}
 }
 
+func TestPutSiteReturnsConfiguredPublicURL(t *testing.T) {
+	root := t.TempDir()
+	store := storage.New(root)
+	tokens, err := token.Load(filepath.Join(t.TempDir(), "tokens.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		BaseURL:        "http://broker.internal:7777",
+		PublicURL:      "https://crate.example/base",
+		Token:          testToken,
+		MaxUploadBytes: 1 << 20,
+	}
+	srv := server.New(cfg, store, tokens, nil, log.New(io.Discard, "", 0))
+	ts := httptest.NewServer(srv.BrokerHandler())
+	defer ts.Close()
+
+	var tarbuf bytes.Buffer
+	tw := tar.NewWriter(&tarbuf)
+	_ = tw.WriteHeader(&tar.Header{Name: "index.html", Mode: 0o644, Size: 2})
+	_, _ = tw.Write([]byte("ok"))
+	_ = tw.Close()
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+wire.PathAPISites+"/published", &tarbuf)
+	req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var out wire.PutSiteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.URL != "https://crate.example/base/published/" {
+		t.Fatalf("URL = %q", out.URL)
+	}
+}
+
 func TestPutSiteExpiryPolicies(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -410,6 +583,136 @@ func TestPutSiteInvalidNameIs400(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Errorf("got %d, want 400", resp.StatusCode)
 	}
+}
+
+func TestBrokerSerializesAllSiteMutations(t *testing.T) {
+	backend := &trackingBackend{}
+	tokens, err := token.Load(filepath.Join(t.TempDir(), "tokens.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{BaseURL: "http://localhost", Token: testToken, MaxUploadBytes: 1 << 20}
+	srv := server.New(cfg, backend, tokens, nil, log.New(io.Discard, "", 0))
+	ts := httptest.NewServer(srv.BrokerHandler())
+	defer ts.Close()
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		<-start
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+wire.PathAPISites+"/serialized", bytes.NewReader(nil))
+		req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+wire.PathAPISites+"/serialized", nil)
+		req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, _ = srv.DeleteExpired(time.Now())
+	}()
+	close(start)
+	wg.Wait()
+
+	if got := backend.maxActive.Load(); got != 1 {
+		t.Fatalf("maximum concurrent mutations = %d, want 1", got)
+	}
+	if got := backend.calls.Load(); got != 3 {
+		t.Fatalf("mutation calls = %d, want 3", got)
+	}
+}
+
+func TestSlowUploadDoesNotBlockDelete(t *testing.T) {
+	backend := &trackingBackend{}
+	tokens, err := token.Load(filepath.Join(t.TempDir(), "tokens.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{BaseURL: "http://localhost", Token: testToken, MaxUploadBytes: 1 << 20}
+	srv := server.New(cfg, backend, tokens, nil, log.New(io.Discard, "", 0))
+	ts := httptest.NewServer(srv.BrokerHandler())
+	defer ts.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(ts.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, err = fmt.Fprintf(conn,
+		"PUT %s/slow HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer %s\r\nContent-Length: 1024\r\n\r\nx",
+		wire.PathAPISites, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+wire.PathAPISites+"/other", nil)
+	req.Header.Set(wire.HeaderAuth, "Bearer "+testToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("delete blocked behind incomplete upload: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", resp.StatusCode)
+	}
+}
+
+type trackingBackend struct {
+	active    atomic.Int32
+	maxActive atomic.Int32
+	calls     atomic.Int32
+}
+
+func (b *trackingBackend) List() ([]wire.Site, error) { return nil, nil }
+func (b *trackingBackend) Names() ([]string, error)   { return nil, nil }
+func (b *trackingBackend) Exists(string) (bool, error) {
+	return false, nil
+}
+func (b *trackingBackend) Stat(string) (wire.Site, error) {
+	return wire.Site{}, storage.ErrNotFound
+}
+func (b *trackingBackend) Open(string) (fs.FS, error) {
+	return nil, storage.ErrNotFound
+}
+func (b *trackingBackend) ReplaceFromTarWithExpiry(name string, _ io.Reader, _ *time.Duration) (wire.Site, error) {
+	b.mutate()
+	return wire.Site{Name: name}, nil
+}
+func (b *trackingBackend) Delete(string) error {
+	b.mutate()
+	return nil
+}
+func (b *trackingBackend) DeleteExpired(time.Time) ([]string, error) {
+	b.mutate()
+	return nil, nil
+}
+
+func (b *trackingBackend) mutate() {
+	b.calls.Add(1)
+	current := b.active.Add(1)
+	for {
+		max := b.maxActive.Load()
+		if current <= max || b.maxActive.CompareAndSwap(max, current) {
+			break
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	b.active.Add(-1)
 }
 
 // --- helpers ---------------------------------------------------------------

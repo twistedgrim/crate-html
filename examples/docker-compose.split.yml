@@ -1,0 +1,67 @@
+# Optional split deployment using one crate-html image and two process roles.
+#
+#   docker compose -f examples/docker-compose.split.yml up -d --build
+#
+# Human-facing crate URLs: http://localhost:7777
+# Broker API for the host CLI: http://localhost:7778
+#
+# The broker is the only writer. The web service mounts the shared site volume
+# read-only and does not mount the broker's config/token volume.
+name: crate-html-split
+
+services:
+  broker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: crate-html:dev
+    container_name: crate-broker
+    restart: unless-stopped
+    command: ["--role=broker"]
+    ports:
+      - "127.0.0.1:7778:7777"
+    environment:
+      # docker exec runs the crate CLI inside this container, where the broker
+      # listens on 7777 rather than the host-published 7778.
+      CRATE_API_URL: http://127.0.0.1:7777
+      CRATE_PUBLIC_URL: http://localhost:7777
+    volumes:
+      - crate-config:/config
+      - crate-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/crate", "status"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: crate-html:dev
+    container_name: crate-web
+    restart: unless-stopped
+    read_only: true
+    command: ["--role=web"]
+    ports:
+      - "7777:7777"
+    environment:
+      CRATE_PUBLIC_URL: http://localhost:7777
+    volumes:
+      - crate-data:/data:ro
+    # Override the image's /config VOLUME with ephemeral memory. The web role
+    # does not create a config/token file, and this avoids a dangling anonymous
+    # Docker volume when the container is replaced.
+    tmpfs:
+      - /config:uid=100,gid=101,mode=0755
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7777/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+
+volumes:
+  crate-config:
+  crate-data:

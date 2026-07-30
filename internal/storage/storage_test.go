@@ -59,6 +59,27 @@ func TestValidateName(t *testing.T) {
 	}
 }
 
+func TestReadOnlyStoreTreatsMissingRootAsEmpty(t *testing.T) {
+	store := storage.New(filepath.Join(t.TempDir(), "missing", "sites"))
+	sites, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sites) != 0 {
+		t.Fatalf("List returned %d sites, want none", len(sites))
+	}
+	names, err := store.Names()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("Names returned %d names, want none", len(names))
+	}
+	if exists, err := store.Exists("site"); err != nil || exists {
+		t.Fatalf("Exists = %v, %v; want false, nil", exists, err)
+	}
+}
+
 func TestReplaceFromTarHappyPath(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

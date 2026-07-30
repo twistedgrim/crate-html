@@ -28,6 +28,11 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
 - **Tier-1 CLI ergonomics:** `crate token`, `crate push --open`, `crate push -` (stdin), `crate push <file.tar>`, `--config <path>` for both binaries, `examples/docker-compose.tsdproxy.yml`.
 - **GitHub Actions CI + release-please.** `.github/workflows/ci.yml` runs `go test -race ./...`, `task smoke`, `task docker:build`, and hadolint on every push + PR. `.github/workflows/release-please.yml` opens the release PR from conventional commits; merging it cuts the tag, cross-builds `crate` + `crated` for darwin/{arm64,amd64} + linux/{amd64,arm64}, attaches archives to the GitHub Release, and pushes a multi-arch image to `ghcr.io/twistedgrim/crate-html`.
 - **Site expiry** (PR #7). `crate push` defaults to 24h; `--expires <duration>` or `--expires never` overrides. Wire header `X-Crate-Expires`; server persists deadlines under a private `.expiries/` metadata dir and reaps elapsed sites once per minute.
+- **Optional broker/web role split.** One image runs as `all` (default),
+  `broker`, or `web`. The broker exclusively owns authenticated mutations,
+  tokens, and expiry; web serves public crate URLs from read-only shared
+  storage. Separate `api_url` and `public_url` settings support independent
+  ports or hostnames without requiring a shared reverse proxy.
 
 ## Near-term
 
@@ -73,7 +78,7 @@ A bare-bones Helm chart or kustomize overlay that runs `crated` behind a Gateway
 
 ### CLI ergonomics
 
-- **`crate ls --urls`** — print each site's full URL (`BaseURL` + `/name/`) so the output is one copy-paste away from a browser tab. Especially useful on tsdproxy where the tailnet hostname isn't in local muscle memory.
+- **`crate ls --urls`** — print each site's full URL (`PublicURL` + `/name/`) so the output is one copy-paste away from a browser tab. Especially useful on tsdproxy where the tailnet hostname isn't in local muscle memory.
 - **`crate stat <name>`** — single-site metadata (size, files, `expires_at`, `updated_at`). The wire type already carries everything; this is just a per-site CLI accessor rather than filtering `crate ls`.
 - **`crate mv old new`** — atomic rename via `os.Rename` in the sites root. Cheap; replaces the current `push` + `rm` dance for "I typo'd the name."
 - **`crate watch <dir> <name>`** — filesystem watcher that auto-pushes on change. Debounced. Useful for the "human edits HTML in an editor while an agent watches" and "agent iterates on generated HTML" loops.

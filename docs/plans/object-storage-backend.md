@@ -83,15 +83,17 @@ how long it can be stale about *another* replica's writes.
 - **Multi-replica staleness.** With more than one replica, a push handled by one
   replica is visible to others only after `MetaTTL`. The local backend never had
   this property because it never had more than one view of the data.
-- **Expiry stays an in-process ticker.** Every replica reaps independently.
-  Deletes are idempotent so concurrent reaping is benign, but it is duplicated
-  work, and at zero replicas nothing reaps at all.
+- **Expiry stays an in-process ticker.** Combined (`role=all`) replicas reap
+  independently. In the split topology, one broker owns the ticker and web
+  replicas never reap. At zero broker/all replicas nothing is physically
+  collected, but web rejects elapsed sites from their stored metadata.
 - **Uploads are buffered in memory.** The archive must be validated before
   anything is written, and there is no scratch disk to stage it on. The existing
   `max_upload_bytes` cap bounds this.
-- **The root token must come from the environment.** `CRATE_TOKEN` is the only
-  way to pin it on a host with no durable config file; without it, a restart
-  generates a fresh random root token.
+- **The broker root token must come from the environment in stateless mode.**
+  `CRATE_TOKEN` is the only way to pin it on a broker with no durable config
+  file; without it, a restart generates a fresh random root token. The web role
+  neither generates nor loads broker token state.
 
 ## The token store
 

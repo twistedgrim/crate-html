@@ -24,6 +24,7 @@ import (
 
 type cli struct {
 	Config string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
+	Role   string `help:"Runtime role: all serves public sites and the broker API; web is public/read-only; broker owns the API and cleanup." default:"all" enum:"all,web,broker" env:"CRATE_ROLE"`
 }
 
 func main() {
@@ -45,7 +46,7 @@ func main() {
 //
 // The S3 backend contacts the bucket here so an unreachable endpoint or a
 // missing bucket stops the daemon at startup instead of failing the first push.
-func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (server.Backend, token.Persistence, error) {
+func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (server.Backend, error) {
 	if cfg.StorageBackend == config.BackendS3 {
 		store, err := s3store.New(context.Background(), s3store.Config{
 			Endpoint:     cfg.S3.Endpoint,
@@ -59,22 +60,44 @@ func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (serve
 			CacheBytes:   cfg.S3.CacheBytes,
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		logger.Printf("sites:  s3://%s/%s (%s)", cfg.S3.Bucket, cfg.S3.Prefix, cfg.S3.Endpoint)
-		// Tokens go in the bucket too, otherwise every restart would mint a
-		// new set and invalidate every client's credentials.
-		return store, store.Document("tokens.yaml"), nil
+		return store, nil
 	}
 
 	store := storage.New(paths.SitesDir)
 	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
 	logger.Printf("sites:  %s", paths.SitesDir)
-	return store, token.FileStore{Path: paths.TokensFile}, nil
+	return store, nil
+}
+
+// tokenPersistence returns the durable named-token document for broker roles.
+// The public web role never calls this, so it does not need token-bucket or
+// local config access.
+func tokenPersistence(cfg config.Config, paths config.Paths, store server.Backend) (token.Persistence, error) {
+	if cfg.StorageBackend == config.BackendS3 {
+		s3, ok := store.(*s3store.Store)
+		if !ok {
+			return nil, errors.New("s3 backend has unexpected implementation")
+		}
+		// Tokens go in the bucket too, otherwise every restart would mint a
+		// new set and invalidate every client's credentials.
+		return s3.Document("tokens.yaml"), nil
+	}
+	return token.FileStore{Path: paths.TokensFile}, nil
 }
 
 func run(root cli) error {
-	paths, err := config.ResolvePaths()
+	var (
+		paths config.Paths
+		err   error
+	)
+	if root.Role == "web" {
+		paths, err = config.ResolvePathsReadOnly()
+	} else {
+		paths, err = config.ResolvePaths()
+	}
 	if err != nil {
 		return err
 	}
@@ -84,7 +107,12 @@ func run(root cli) error {
 		// --config deployment is fully self-contained.
 		paths.TokensFile = filepath.Join(filepath.Dir(root.Config), "tokens.yaml")
 	}
-	cfg, err := config.LoadOrInit(paths)
+	var cfg config.Config
+	if root.Role == "web" {
+		cfg, err = config.LoadReadOnly(paths)
+	} else {
+		cfg, err = config.LoadOrInit(paths)
+	}
 	if err != nil {
 		return err
 	}
@@ -94,35 +122,70 @@ func run(root cli) error {
 	}
 
 	logger := log.New(os.Stderr, "crated ", log.LstdFlags|log.Lmsgprefix)
+	logger.Printf("role:   %s", root.Role)
 	logger.Printf("config: %s", paths.ConfigFile)
-	logger.Printf("listen: %s", cfg.BaseURL)
+	logger.Printf("listen: %s", cfg.ListenAddr)
+	if root.Role != "web" {
+		logger.Printf("api:    %s", cfg.EffectiveAPIURL())
+	}
+	if root.Role != "broker" {
+		logger.Printf("public: %s", cfg.EffectivePublicURL())
+	}
 
-	store, tokenStore, err := openStore(cfg, paths, logger)
+	store, err := openStore(cfg, paths, logger)
 	if err != nil {
 		return err
 	}
 
-	tokens, err := token.LoadFrom(tokenStore)
-	if err != nil {
-		return err
+	var tokens *token.Store
+	if root.Role != "web" {
+		tokenStore, terr := tokenPersistence(cfg, paths, store)
+		if terr != nil {
+			return terr
+		}
+		tokens, err = token.LoadFrom(tokenStore)
+		if err != nil {
+			return err
+		}
 	}
-	srv := server.New(cfg, store, tokens, builtin.Sites(), logger)
-	if cfg.IndexTemplate != "" {
+	var builtins []builtin.Site
+	if root.Role != "broker" {
+		builtins = builtin.Sites()
+	}
+	var srv *server.Server
+	if root.Role == "web" {
+		srv = server.NewReadOnly(cfg, store, builtins, logger)
+	} else {
+		srv = server.New(cfg, store, tokens, builtins, logger)
+	}
+	if root.Role != "broker" && cfg.IndexTemplate != "" {
 		if err := srv.UseIndexTemplateFile(cfg.IndexTemplate); err != nil {
 			return err
 		}
 		logger.Printf("index:  %s (custom)", cfg.IndexTemplate)
 	}
 
+	var handler http.Handler
+	switch root.Role {
+	case "web":
+		handler = srv.PublicHandler()
+	case "broker":
+		handler = srv.BrokerHandler()
+	default:
+		handler = srv.Handler()
+	}
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           srv.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       30 * time.Second,
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	go watchExpiries(ctx, srv, logger, time.Minute)
+	if root.Role != "web" {
+		go watchExpiries(ctx, srv, logger, time.Minute)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

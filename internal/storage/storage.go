@@ -216,6 +216,9 @@ func (s *Store) DeleteExpired(now time.Time) ([]string, error) {
 // what would otherwise be a 404).
 func (s *Store) Names() ([]string, error) {
 	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return []string{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -236,6 +239,9 @@ func (s *Store) Names() ([]string, error) {
 // List returns metadata for every site under root.
 func (s *Store) List() ([]wire.Site, error) {
 	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return []wire.Site{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}

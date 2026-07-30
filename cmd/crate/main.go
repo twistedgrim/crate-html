@@ -33,11 +33,19 @@ func (c *pushCmd) Run(g *globals) error {
 		return err
 	}
 	fmt.Printf("pushed %s (%d files, %d bytes)\n", res.Site.Name, res.Site.FileCount, res.Site.SizeBytes)
-	// Build the display URL from the base URL this client actually dialed,
-	// not the server-reported one: behind Docker port-mapping or a reverse
-	// proxy the daemon only knows its internal address, so res.URL would be
-	// a dead link from the caller's side of the boundary.
-	url := strings.TrimRight(g.cfg.BaseURL, "/") + "/" + res.Site.Name + "/"
+	// An explicit public URL is authoritative. Legacy base_url-only configs
+	// retain the old client-side URL construction, which matters when an older
+	// daemon only knows its container-internal address. If the client opted
+	// into a separate API URL but omitted public_url, use the broker response.
+	url := ""
+	if g.cfg.PublicURL != "" || g.cfg.APIURL == "" {
+		url = strings.TrimRight(g.cfg.EffectivePublicURL(), "/") + "/" + res.Site.Name + "/"
+	} else {
+		url = res.URL
+	}
+	if url == "" {
+		url = strings.TrimRight(g.cfg.EffectivePublicURL(), "/") + "/" + res.Site.Name + "/"
+	}
 	fmt.Println(url)
 	if res.Site.ExpiresAt == nil {
 		fmt.Println("expires never")
@@ -119,7 +127,11 @@ type openCmd struct {
 }
 
 func (c *openCmd) Run(g *globals) error {
-	url := g.cfg.BaseURL + "/" + c.Name + "/"
+	publicURL, err := resolvePublicURL(context.Background(), g)
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(publicURL, "/") + "/" + c.Name + "/"
 	fmt.Println(url)
 	return openBrowser(url)
 }
@@ -132,8 +144,27 @@ func (c *statusCmd) Run(g *globals) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("crated %s  base=%s  sites=%d\n", st.Version, g.cfg.BaseURL, st.SiteCount)
+	publicURL := g.cfg.EffectivePublicURL()
+	if g.cfg.PublicURL == "" && g.cfg.APIURL != "" && st.PublicURL != "" {
+		publicURL = st.PublicURL
+	}
+	fmt.Printf("crated %s  api=%s  public=%s  sites=%d\n",
+		st.Version, g.cfg.EffectiveAPIURL(), publicURL, st.SiteCount)
 	return nil
+}
+
+func resolvePublicURL(ctx context.Context, g *globals) (string, error) {
+	if g.cfg.PublicURL != "" || g.cfg.APIURL == "" {
+		return g.cfg.EffectivePublicURL(), nil
+	}
+	st, err := cliclient.New(g.cfg).Status(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve public URL from broker: %w", err)
+	}
+	if st.PublicURL == "" {
+		return "", fmt.Errorf("broker did not report a public URL; set CRATE_PUBLIC_URL")
+	}
+	return st.PublicURL, nil
 }
 
 type tokenCmd struct {

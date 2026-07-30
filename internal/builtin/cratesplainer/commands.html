@@ -67,7 +67,7 @@ on macOS this calls <code>open</code>. On Linux it calls <code>xdg-open</code>. 
 <p>This tells you if the daemon is up. Useful when nothing else is working and you've started to suspect the daemon might not be up.</p>
 
 <pre>$ crate status
-crated 0.1.0-dev  base=http://localhost:7777  sites=3</pre>
+crated 0.1.0-dev  api=http://localhost:7777  public=http://localhost:7777  sites=3</pre>
 
 <p>If you get a connection-refused error: the daemon is not up. Run <code>crated</code> in another terminal. There. You did it. I'm proud of you.</p>
 

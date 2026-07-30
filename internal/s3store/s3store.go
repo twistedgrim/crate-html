@@ -153,18 +153,23 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("s3: client: %w", err)
 	}
 
-	ok, err := client.BucketExists(ctx, cfg.Bucket)
-	if err != nil {
-		return nil, fmt.Errorf("s3: reach bucket %q at %s: %w", cfg.Bucket, endpoint, err)
-	}
-	if !ok {
-		return nil, fmt.Errorf("s3: bucket %q does not exist at %s", cfg.Bucket, endpoint)
-	}
-
 	prefix := cfg.Prefix
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
+	// Probe the exact metadata prefix the store needs instead of issuing a
+	// bucket-wide HEAD. This permits public web credentials to scope
+	// s3:ListBucket by s3:prefix and prevents startup from requiring visibility
+	// into private state/ keys.
+	for obj := range client.ListObjects(ctx, cfg.Bucket, minio.ListObjectsOptions{
+		Prefix:  prefix + "meta/",
+		MaxKeys: 1,
+	}) {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("s3: reach bucket %q at %s: %w", cfg.Bucket, endpoint, obj.Err)
+		}
+	}
+
 	metaTTL := cfg.MetaTTL
 	if metaTTL <= 0 {
 		metaTTL = defaultMetaTTL

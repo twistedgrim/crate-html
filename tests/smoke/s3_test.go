@@ -35,7 +35,7 @@ import (
 // skips rather than fails: the S3 backend is optional and contributors without
 // Docker should still get a green run.
 const (
-	rustfsImage     = "rustfs/rustfs:latest"
+	rustfsImage     = "rustfs/rustfs@sha256:84ce557a0245a06a9aae5516f55ee0f007fca78d41df356f419306fdc0cb168c"
 	rustfsContainer = "crate-smoke-rustfs"
 	rustfsPort      = 19100
 	s3AccessKey     = "rustfsadmin"

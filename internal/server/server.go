@@ -48,13 +48,14 @@ const defaultExpiry = 24 * time.Hour
 
 // Server bundles the HTTP handlers.
 type Server struct {
-	store     Backend
-	tokens    *token.Store
-	cfg       config.Config
-	log       *log.Logger
-	builtins  []builtin.Site
-	indexTmpl *template.Template
-	expiryMu  sync.Mutex
+	store      ReadBackend
+	mutable    Backend
+	tokens     *token.Store
+	cfg        config.Config
+	log        *log.Logger
+	builtins   []builtin.Site
+	indexTmpl  *template.Template
+	mutationMu sync.Mutex
 }
 
 // New returns a Server. Pass nil for builtins to skip embedded sites and nil
@@ -63,7 +64,22 @@ func New(cfg config.Config, store Backend, tokens *token.Store, builtins []built
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Server{store: store, tokens: tokens, cfg: cfg, log: logger, builtins: builtins, indexTmpl: defaultIndexTmpl}
+	return &Server{
+		store: store, mutable: store, tokens: tokens, cfg: cfg, log: logger,
+		builtins: builtins, indexTmpl: defaultIndexTmpl,
+	}
+}
+
+// NewReadOnly returns a Server with no mutation backend or token store. It is
+// used by the public web role so only read operations are reachable from that
+// process's HTTP layer.
+func NewReadOnly(cfg config.Config, store ReadBackend, builtins []builtin.Site, logger *log.Logger) *Server {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &Server{
+		store: store, cfg: cfg, log: logger, builtins: builtins, indexTmpl: defaultIndexTmpl,
+	}
 }
 
 // UseIndexTemplateFile parses path and uses it for the root/group index
@@ -93,11 +109,36 @@ func (s *Server) UseIndexTemplateFile(path string) error {
 	return nil
 }
 
-// Handler returns the root http.Handler for the daemon.
+// Handler returns the combined broker + public handler used by the default
+// all-in-one deployment.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.registerBrokerRoutes(mux)
+	s.registerPublicRoutes(mux)
+	return mux
+}
 
-	// API
+// BrokerHandler returns only the authenticated control-plane API plus health.
+// Public crate URLs deliberately return 404 on this surface.
+func (s *Server) BrokerHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.registerBrokerRoutes(mux)
+	return mux
+}
+
+// PublicHandler returns only the human-facing index/static server plus health.
+// No /api route is registered on this surface.
+func (s *Server) PublicHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.registerPublicRoutes(mux)
+	mux.HandleFunc("/", http.NotFound)
+	return mux
+}
+
+func (s *Server) registerBrokerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/sites", s.requireAuth(s.handleListSites))
 	mux.HandleFunc("PUT /api/sites/{name}", s.requireAuth(s.handlePutSite))
@@ -109,11 +150,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tokens", s.requireRoot(s.handleCreateToken))
 	mux.HandleFunc("GET /api/tokens", s.requireRoot(s.handleListTokens))
 	mux.HandleFunc("DELETE /api/tokens/{id}", s.requireRoot(s.handleRevokeToken))
+}
 
-	// Static + index
+func (s *Server) registerPublicRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", s.handlePublic)
-
-	return mux
 }
 
 // bearer extracts the bearer value from the Authorization header, or "" if
@@ -185,7 +225,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, wire.StatusResponse{
 		Version:   Version,
 		SiteCount: len(sites),
+		PublicURL: s.cfg.EffectivePublicURL(),
 	})
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, wire.HealthResponse{Version: Version})
 }
 
 func (s *Server) handleListSites(w http.ResponseWriter, _ *http.Request) {
@@ -210,11 +255,37 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.expiryMu.Lock()
-	defer s.expiryMu.Unlock()
-
 	body := http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes)
-	site, err := s.store.ReplaceFromTarWithExpiry(name, body, expiry)
+	staged, err := os.CreateTemp("", "crate-upload-*.tar")
+	if err != nil {
+		s.log.Printf("stage upload %s: %v", name, err)
+		writeError(w, http.StatusInternalServerError, "stage upload failed")
+		return
+	}
+	defer func() {
+		_ = staged.Close()
+		_ = os.Remove(staged.Name())
+	}()
+	if _, err := io.Copy(staged, body); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("upload exceeds %d bytes (max_upload_bytes in config.yaml)", s.cfg.MaxUploadBytes))
+			return
+		}
+		s.log.Printf("read upload %s: %v", name, err)
+		writeError(w, http.StatusBadRequest, "read upload failed")
+		return
+	}
+	if _, err := staged.Seek(0, io.SeekStart); err != nil {
+		s.log.Printf("rewind upload %s: %v", name, err)
+		writeError(w, http.StatusInternalServerError, "stage upload failed")
+		return
+	}
+
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	site, err := s.mutable.ReplaceFromTarWithExpiry(name, staged, expiry)
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) || errors.Is(err, storage.ErrSiteTooLarge) {
@@ -232,16 +303,16 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, wire.PutSiteResponse{
 		Site: site,
-		URL:  s.cfg.BaseURL + "/" + name + "/",
+		URL:  strings.TrimRight(s.cfg.EffectivePublicURL(), "/") + "/" + name + "/",
 	})
 }
 
 // DeleteExpired serializes broker cleanup with uploads so a replacement and
 // its new deadline cannot be split by the cleanup pass.
 func (s *Server) DeleteExpired(now time.Time) ([]string, error) {
-	s.expiryMu.Lock()
-	defer s.expiryMu.Unlock()
-	return s.store.DeleteExpired(now)
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	return s.mutable.DeleteExpired(now)
 }
 
 func parseExpiry(value string) (*time.Duration, error) {
@@ -350,7 +421,9 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.store.Delete(name); err != nil {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	if err := s.mutable.Delete(name); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -385,9 +458,14 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stored sites first.
-	exists, err := s.store.Exists(name)
-	if err == nil && exists {
+	// Stored sites first. Expiry is enforced on every read so a stopped broker
+	// can delay garbage collection but can never extend public availability.
+	site, err := s.store.Stat(name)
+	if err == nil {
+		if expired(site, time.Now()) {
+			http.NotFound(w, r)
+			return
+		}
 		fsys, oerr := s.store.Open(name)
 		if oerr != nil {
 			if errors.Is(oerr, storage.ErrNotFound) {
@@ -514,6 +592,8 @@ func (s *Server) renderIndex(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sites = unexpiredSites(sites, time.Now())
+
 	// Track which builtins are shadowed by a disk site of the same name.
 	diskNames := make(map[string]bool, len(sites))
 	for _, site := range sites {
@@ -552,6 +632,7 @@ func (s *Server) renderGroupIndex(w http.ResponseWriter, r *http.Request, prefix
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sites = unexpiredSites(sites, time.Now())
 	rows := make([]siteRow, 0)
 	for _, site := range sites {
 		if strings.HasPrefix(site.Name, prefix+".") {
@@ -567,6 +648,20 @@ func (s *Server) renderGroupIndex(w http.ResponseWriter, r *http.Request, prefix
 		Group:  true,
 		Groups: []siteGroup{{Rows: rows}},
 	})
+}
+
+func expired(site wire.Site, now time.Time) bool {
+	return site.ExpiresAt != nil && !site.ExpiresAt.After(now)
+}
+
+func unexpiredSites(sites []wire.Site, now time.Time) []wire.Site {
+	out := sites[:0]
+	for _, site := range sites {
+		if !expired(site, now) {
+			out = append(out, site)
+		}
+	}
+	return out
 }
 
 func (s *Server) executeIndex(w http.ResponseWriter, view indexView) {
