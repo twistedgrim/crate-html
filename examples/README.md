@@ -34,3 +34,22 @@ docker compose up -d
 ```
 
 See [`docs/deploy.md`](../docs/deploy.md#3-docker--tsdproxy-on-tailscale-https-on-your-tailnet) for the full deployment recipe, including the `authKeyFile` vs env var configuration detail and the persistent-`/data`-volume requirement.
+
+## `docker-compose.split.yml`
+
+Runs the optional two-process topology from the same image:
+
+- `broker` owns `/api/*`, uploads, deletes, tokens, and expiry cleanup.
+- `web` serves only `/`, built-ins, and `/<site>/...`.
+- Both use `crate-data`; the web mount is read-only.
+- The services use separate host ports, so no reverse proxy is required.
+
+```bash
+task docker:split:up
+eval "$(task docker:split:env)"
+crate push ./my-site my-site
+```
+
+The broker API is loopback-only at `http://localhost:7778`. Human-facing crate
+URLs use `http://localhost:7777`. Stop it with `task docker:split:down`;
+volumes are preserved.

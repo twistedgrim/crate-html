@@ -39,14 +39,16 @@ Go stateless only when you genuinely cannot mount anything. Then the root token
   role, instance profile). Under an IAM role there are no secrets to supply.
 - **Permissions** on the bucket:
 
-  | Action | Used for |
-  |---|---|
-  | `s3:ListBucket` | startup bucket check, listing sites |
-  | `s3:GetObject` | serving sites, reading metadata and tokens |
-  | `s3:PutObject` | pushing sites, writing metadata and tokens |
-  | `s3:DeleteObject` | `crate rm`, expiry, superseded versions |
+  | Action | Broker | Web | Used for |
+  |---|---:|---:|---|
+  | `s3:ListBucket` | yes | yes | startup bucket check, listing sites |
+  | `s3:GetObject` | yes | yes | serving sites, reading metadata and tokens |
+  | `s3:PutObject` | yes | no | pushing sites, writing metadata and tokens |
+  | `s3:DeleteObject` | yes | no | `crate rm`, expiry, superseded versions |
 
   Scope them to the bucket and, if you use `prefix`, to that key prefix.
+  In a split deployment, give the public web role a distinct read/list-only
+  identity. It does not load token state.
 
 ## Configuration
 
@@ -73,6 +75,27 @@ CRATE_S3_BUCKET=crate \
 CRATE_S3_ACCESS_KEY=... \
 CRATE_S3_SECRET_KEY=... \
 CRATE_TOKEN=<your-root-token> \
+crated
+```
+
+Role-split invocation uses the same bucket and prefix for both processes:
+
+```bash
+# Broker: one replica, write-capable credentials
+CRATE_ROLE=broker \
+CRATE_API_URL=https://broker.internal.example \
+CRATE_PUBLIC_URL=https://crate.example \
+CRATE_STORAGE_BACKEND=s3 \
+CRATE_S3_ENDPOINT=https://s3.example.com \
+CRATE_S3_BUCKET=crate \
+crated
+
+# Web: one or more replicas, read/list-only credentials
+CRATE_ROLE=web \
+CRATE_PUBLIC_URL=https://crate.example \
+CRATE_STORAGE_BACKEND=s3 \
+CRATE_S3_ENDPOINT=https://s3.example.com \
+CRATE_S3_BUCKET=crate \
 crated
 ```
 
@@ -109,14 +132,17 @@ they are in the bucket. This is the single most common way to get this wrong.
 as `https://localhost:9000` and will fail against a plaintext dev server. Write
 `http://localhost:9000` explicitly.
 
-**Multiple replicas are eventually consistent.** A push handled by one replica
-becomes visible to others within about ten seconds (the metadata cache TTL). The
-local backend never had this property because it never had more than one view of
-the data. Pin to one replica if you need read-your-writes across the fleet.
+**Separate readers are eventually consistent.** A push handled by the broker
+becomes visible to web processes within about ten seconds (the metadata cache
+TTL). Version-keyed content prevents a refreshed reader from serving a mixed or
+partial site.
 
-**Expiry runs independently in every replica.** Deletes are idempotent so this is
-harmless, but it is duplicated work — and at zero replicas nothing reaps at all,
-so sites outlive their deadline until something is running again.
+**Run one broker replica.** The broker serializes uploads, manual deletes, and
+expiry cleanup in-process. Multiple broker processes would need distributed
+coordination and are not currently supported. Web replicas are read-only and
+may scale independently. If no broker is running, unexpired sites remain
+readable and expired sites are hidden by web, but elapsed storage is not
+collected and no mutations can be accepted.
 
 **Token writes are compare-and-swap.** Two replicas minting at once would
 otherwise clobber each other's token set, so a stale writer is refused rather
@@ -145,10 +171,15 @@ task rustfs:up
 For the hybrid mode, add a `/config` volume to the `crated` service and drop
 `CRATE_TOKEN`.
 
+To try the role boundary without S3 first,
+`examples/docker-compose.split.yml` runs broker and web against one local
+volume, mounting it read-only into web.
+
 ## Tests
 
 ```bash
 task smoke:s3
+task docker:e2e:s3
 ```
 
 Starts rustfs in Docker on demand and runs the object-storage end-to-end suite:
@@ -157,3 +188,8 @@ against a fresh home, token survival across a restart, and the token
 compare-and-swap conflict path. Set `CRATE_TEST_S3_ENDPOINT` to run against an
 existing server instead. With neither available the suite skips rather than
 fails.
+
+`task docker:e2e:s3` adds the complete container topology: rustfs, a
+write-capable broker, and a separately credentialed read-only web process. It
+proves that web can list/read published sites while direct S3 PUT and DELETE
+attempts are denied, then verifies token persistence and broker-driven deletion.

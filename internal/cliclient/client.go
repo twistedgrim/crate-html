@@ -25,7 +25,7 @@ type Client struct {
 // New returns a Client configured from cfg.
 func New(cfg config.Config) *Client {
 	return &Client{
-		base:  strings.TrimRight(cfg.BaseURL, "/"),
+		base:  strings.TrimRight(cfg.EffectiveAPIURL(), "/"),
 		token: cfg.Token,
 		hc:    &http.Client{},
 	}

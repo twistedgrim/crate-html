@@ -12,6 +12,30 @@ The agent calls `crate push`; the human opens a URL in a browser. Those are sepa
 
 `internal/wire` defines request/response types in one place. Both binaries import it; they don't import each other.
 
+## One daemon image, optional process roles
+
+`crated` defaults to `--role=all`, preserving the original single-process
+deployment. Operators may instead run the same image twice:
+
+- `--role=broker` owns authenticated `/api/*` routes, tokens, uploads, deletes,
+  and expiry cleanup.
+- `--role=web` owns the public index and `/<site>/...` static paths.
+
+The broker is the only writer. A local web container mounts the shared data
+volume read-only; an S3-backed web process uses read/list-only credentials.
+This keeps the public consumption path unable to mutate artifacts without
+creating a second binary or image.
+
+One broker replica is the supported split topology. The in-process mutation
+lock serializes uploads, manual deletes, and expiry cleanup; multiple broker
+processes would require a distributed lock or conditional mutation protocol.
+Web replicas can scale independently.
+
+The services do not require a shared reverse proxy. `api_url` identifies the
+broker endpoint used by `crate`; `public_url` identifies the origin humans
+open. A proxy may present them under one hostname, but separate hostnames or
+ports work equally well.
+
 ## HTTP push, not direct disk write
 
 The CLI could write directly to `$XDG_DATA_HOME/crate/sites/<name>/` since it shares a host with the daemon. We don't.
@@ -55,12 +79,17 @@ Reason: if you ever expose the daemon (Caddy, tailnet, anything), retrofitting a
 | Env var | Overrides |
 |---|---|
 | `CRATE_LISTEN_ADDR` | `listen_addr` |
-| `CRATE_BASE_URL` | `base_url` |
+| `CRATE_BASE_URL` | legacy fallback for both API and public URLs |
+| `CRATE_API_URL` | `api_url` (broker endpoint used by the CLI) |
+| `CRATE_PUBLIC_URL` | `public_url` (human-facing site origin) |
 | `CRATE_TOKEN` | `token` |
 
 Overrides stay process-local — the on-disk config isn't rewritten. The mechanism exists for one specific case: containers. Inside Docker, `crated` must bind `0.0.0.0:7777` for the port mapping to work; outside, it must bind `127.0.0.1`. An env-var override in the Dockerfile (`ENV CRATE_LISTEN_ADDR=0.0.0.0:7777`) handles this without needing two different config files.
 
-There's intentionally no `CRATE_PORT` — `port` only exists to compose the default `listen_addr`/`base_url` strings. Overriding it after defaults are applied wouldn't change anything reachable. To bind a different port, set `CRATE_LISTEN_ADDR` directly.
+`CRATE_BASE_URL` remains compatible with old configuration: it sets both
+destinations unless an explicit API or public URL overrides that side.
+
+There's intentionally no `CRATE_PORT` — `port` only exists to compose the default `listen_addr`/URL strings. Overriding it after defaults are applied wouldn't change anything reachable. To bind a different port, set `CRATE_LISTEN_ADDR` directly.
 
 ## Localhost-only binding
 

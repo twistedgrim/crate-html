@@ -20,9 +20,30 @@ How crate-html works end-to-end. This document describes *what* the system does 
 Two binaries, one Go module:
 
 - **`crate`** — short-lived CLI invoked once per push/list/rm/open. Reads `config.yaml`, talks HTTP to `crated`.
-- **`crated`** — long-lived HTTP daemon. Outlives any single agent invocation. Owns the filesystem under `$XDG_DATA_HOME/crate/sites/`.
+- **`crated`** — long-lived HTTP daemon. Outlives any single agent invocation.
+  It runs both surfaces by default, or only the broker/web surface when a role
+  is selected.
 
 `internal/wire` defines the HTTP request/response types. Both binaries import it; they don't import each other.
+
+## Optional role split
+
+```
+crate CLI / agents ── API URL ──▶ broker ── read/write ─┐
+                                                        ├─ shared volume or S3
+humans / browsers ── public URL ─▶ web ───── read-only ─┘
+```
+
+| Role | Routes | Storage access | Background work |
+|---|---|---|---|
+| `all` (default) | API + public | read/write | expiry cleanup |
+| `broker` | `/api/*`, `/healthz` | read/write | expiry cleanup |
+| `web` | `/`, `/<site>/...`, `/healthz` | read-only | none |
+
+The split works with separate ports or hostnames; it does not depend on both
+services sitting behind one reverse proxy. A local-volume deployment must keep
+both containers on the same Docker host. Separate hosts should use S3-compatible
+storage.
 
 ## HTTP API surface
 
@@ -46,7 +67,8 @@ Two binaries, one Go module:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/status` | Liveness probe — version + site count |
+| `GET` | `/healthz` | Role-independent process liveness |
+| `GET` | `/api/status` | Liveness probe — version, site count, and authoritative public origin |
 | `GET` | `/` | HTML index linking to all sites (disk + built-in) |
 | `GET` | `/<site>/` | Serve `<site>/index.html` |
 | `GET` | `/<site>/<path>` | Serve a file under the site |
@@ -131,8 +153,10 @@ New pushes expire after 24 hours by default. `crate push --expires <duration>`
 sets another lifetime and `--expires never` opts out using the same flag. The
 CLI sends the policy in `X-Crate-Expires`; the daemon persists the absolute
 deadline under the private `.expiries` metadata directory and checks for elapsed
-sites once a minute. Sites without metadata, including sites from older
-versions, are retained indefinitely.
+sites once a minute. Public handlers also enforce the deadline at read time, so
+broker downtime can delay storage cleanup but never extends public availability.
+Sites without metadata, including sites from older versions, are retained
+indefinitely.
 
 | XDG var | Linux default | macOS default | Purpose |
 |---|---|---|---|
@@ -149,10 +173,15 @@ Site data lives under `XDG_DATA_HOME` (not `XDG_CACHE_HOME`) deliberately — th
 | Env var | Overrides | Use case |
 |---|---|---|
 | `CRATE_LISTEN_ADDR` | `listen_addr` | Bind `0.0.0.0:7777` inside Docker; `127.0.0.1:7777` outside |
-| `CRATE_BASE_URL` | `base_url` | Self-URL returned in `crate push` responses |
+| `CRATE_BASE_URL` | `base_url` | Legacy fallback used for both URLs |
+| `CRATE_API_URL` | `api_url` | Broker origin dialed by the CLI |
+| `CRATE_PUBLIC_URL` | `public_url` | Human-facing origin returned after pushes |
 | `CRATE_TOKEN` | `token` | Runtime token override (Docker secrets, host CLI talking to a container) |
 
 Overrides stay process-local — the on-disk config isn't rewritten. There's no `CRATE_PORT` env var; `port` only exists to compose default address strings, and overriding it after defaults are applied silently no-ops.
+
+When only `base_url`/`CRATE_BASE_URL` is set, both effective URLs use it and
+the deployment behaves exactly as it did before role splitting.
 
 ## Built-in sites
 

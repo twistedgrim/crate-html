@@ -1,0 +1,81 @@
+services:
+  rustfs:
+    image: rustfs/rustfs@sha256:84ce557a0245a06a9aae5516f55ee0f007fca78d41df356f419306fdc0cb168c
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+    volumes:
+      - rustfs-data:/data
+
+  initialize:
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      - rustfs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        until mc alias set local http://rustfs:9000 rustfsadmin rustfsadmin; do sleep 1; done
+        mc mb --ignore-existing local/crate
+        mc admin user add local cratebroker broker-e2e-secret
+        mc admin policy attach local readwrite --user cratebroker
+        mc admin user add local crateweb web-e2e-secret
+        mc admin policy create local crate-web-readonly /policies/web-readonly.json
+        mc admin policy attach local crate-web-readonly --user crateweb
+    volumes:
+      - ./policies/web-readonly.json:/policies/web-readonly.json:ro
+
+  broker:
+    image: ${CRATE_E2E_IMAGE:-crate-html:e2e}
+    command: ["--role=broker"]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    environment:
+      CRATE_API_URL: http://127.0.0.1:7777
+      CRATE_PUBLIC_URL: http://web:7777
+      CRATE_TOKEN: s3-e2e-root-token
+      CRATE_STORAGE_BACKEND: s3
+      CRATE_S3_ENDPOINT: http://rustfs:9000
+      CRATE_S3_BUCKET: crate
+      CRATE_S3_ACCESS_KEY: cratebroker
+      CRATE_S3_SECRET_KEY: broker-e2e-secret
+    tmpfs:
+      - /config:uid=100,gid=101,mode=0755
+      - /data:uid=100,gid=101,mode=0755
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/crate", "status"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  web:
+    image: ${CRATE_E2E_IMAGE:-crate-html:e2e}
+    read_only: true
+    command: ["--role=web"]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    environment:
+      CRATE_PUBLIC_URL: http://web:7777
+      CRATE_STORAGE_BACKEND: s3
+      CRATE_S3_ENDPOINT: http://rustfs:9000
+      CRATE_S3_BUCKET: crate
+      CRATE_S3_ACCESS_KEY: crateweb
+      CRATE_S3_SECRET_KEY: web-e2e-secret
+    tmpfs:
+      - /config:uid=100,gid=101,mode=0755
+      - /data:uid=100,gid=101,mode=0755
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7777/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  iam:
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    profiles: ["tools"]
+    entrypoint: ["/bin/sh"]
+
+volumes:
+  rustfs-data:

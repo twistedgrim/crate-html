@@ -41,6 +41,12 @@ type PutSiteResponse struct {
 type StatusResponse struct {
 	Version   string `json:"version"`
 	SiteCount int    `json:"site_count"`
+	PublicURL string `json:"public_url"`
+}
+
+// HealthResponse is returned by GET /healthz on every daemon role.
+type HealthResponse struct {
+	Version string `json:"version"`
 }
 
 // TokenInfo describes a minted API token. The secret is never included;

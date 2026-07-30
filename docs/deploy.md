@@ -9,6 +9,10 @@ Four deployment shapes, in order of escalation:
 
 All four serve the same HTTP API; the first three differ in *who can reach the daemon* and *who owns the lifecycle*, while the fourth changes *where sites live*. crate-html itself stays HTTP-only — TLS, hostnames, and remote access are layered above it.
 
+Every shape may use the default combined daemon or the optional
+[split broker + web topology](#optional-split-broker--web). The split still
+uses one image.
+
 ## 1. Local foreground (laptop)
 
 The default for casual use and development. The daemon binds `127.0.0.1:7777` only.
@@ -40,6 +44,59 @@ The image is a multi-stage build (~34 MB on `alpine:3.22`). Inside the container
 - Healthcheck runs `crate status` every 10s.
 
 `task docker:down` preserves both volumes; `task docker:nuke` deletes them (calls `docker compose down -v`).
+
+## Optional split broker + web
+
+Use this when the human-facing crate URLs should be isolated from the
+write-capable API:
+
+```bash
+task docker:split:up
+eval "$(task docker:split:env)"
+./bin/crate push ./my-site demo
+```
+
+The example exposes two independent endpoints:
+
+| Endpoint | Audience | Service |
+|---|---|---|
+| `http://localhost:7777` | Humans and browsers | Read-only web |
+| `http://localhost:7778` | Local CLI and agents | Broker API |
+
+No reverse proxy is required. `CRATE_API_URL` sends CLI operations to the
+broker; `CRATE_PUBLIC_URL` tells the broker and CLI which URL humans should
+open. The pushed site response therefore points at port 7777 even though the
+upload went to port 7778.
+
+Both containers come from the same image:
+
+```yaml
+services:
+  broker:
+    image: crate-html:dev
+    command: ["--role=broker"]
+    volumes:
+      - crate-config:/config
+      - crate-data:/data
+
+  web:
+    image: crate-html:dev
+    command: ["--role=web"]
+    volumes:
+      - crate-data:/data:ro
+```
+
+The broker exclusively owns uploads, manual deletes, token state, and expiry
+cleanup. Run one broker replica. The web role neither loads the broker token
+store nor runs cleanup, and it can be replicated freely.
+
+For a shared hostname, route `/api/*` to broker and everything else to web.
+For separate hostnames, expose the broker only on a private network or
+Tailscale and publish the web hostname normally. The CLI only needs network
+access to the broker; humans only need network access to web.
+
+With local storage, both containers must see the same volume on one Docker
+host. To place them on different hosts, use the S3 backend.
 
 ### Pushing from the host CLI (development)
 
@@ -211,12 +268,17 @@ crated sites:  s3://crate/ (https://s3.example.com)
   comes from `config.yaml`; without a durable `/config` and without this env var
   every restart mints a new random one and invalidates whatever your clients
   were using. Named tokens are unaffected — they live in the bucket.
-- **Multiple replicas go eventually consistent.** A push handled by one replica
-  becomes visible to the others within about ten seconds. Expiry also runs
-  independently in every replica. Token writes are compare-and-swap, so a
-  concurrent mint fails loudly rather than silently dropping the other
-  replica's tokens. Pin to one replica if you want the same behavior as the
-  local backend.
+- **Combined (`role=all`) replicas go eventually consistent.** A push handled
+  by one replica becomes visible to the others within about ten seconds.
+  Expiry also runs independently in every combined replica. Token writes are
+  compare-and-swap, so a concurrent mint fails loudly rather than silently
+  dropping the other replica's tokens. Pin to one combined replica if you want
+  the same behavior as the local backend.
+
+For a role-split S3 deployment, run one broker with read/write/delete
+credentials and any number of web processes with list/read-only credentials.
+Each web process refreshes metadata within about ten seconds, then fetches the
+new version-keyed content.
 
 Full operator reference — permissions, every setting, bucket layout, and the
 rest of the gotchas — is in [`s3-storage.md`](./s3-storage.md).

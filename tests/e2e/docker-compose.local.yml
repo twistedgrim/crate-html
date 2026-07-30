@@ -1,0 +1,35 @@
+services:
+  broker:
+    image: ${CRATE_E2E_IMAGE:-crate-html:e2e}
+    command: ["--role=broker"]
+    environment:
+      CRATE_API_URL: http://127.0.0.1:7777
+      CRATE_PUBLIC_URL: http://web:7777
+    volumes:
+      - crate-config:/config
+      - crate-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/crate", "status"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  web:
+    image: ${CRATE_E2E_IMAGE:-crate-html:e2e}
+    read_only: true
+    command: ["--role=web"]
+    environment:
+      CRATE_PUBLIC_URL: http://web:7777
+    volumes:
+      - crate-data:/data:ro
+    tmpfs:
+      - /config:uid=100,gid=101,mode=0755
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7777/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  crate-config:
+  crate-data:

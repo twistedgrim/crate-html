@@ -121,6 +121,47 @@ tasks:
     cmds:
       - docker compose exec crated sh
 
+  docker:split:up:
+    desc: Start separate broker and read-only web containers from one image
+    cmds:
+      - docker compose -f examples/docker-compose.split.yml up -d --build
+      - docker compose -f examples/docker-compose.split.yml ps
+
+  docker:split:down:
+    desc: Stop the split broker/web stack (volumes preserved)
+    cmds:
+      - docker compose -f examples/docker-compose.split.yml down
+
+  docker:split:logs:
+    desc: Tail the split broker/web logs
+    cmds:
+      - docker compose -f examples/docker-compose.split.yml logs -f broker web
+
+  docker:split:env:
+    desc: Print exports for the host CLI to use the split broker and public web URL
+    silent: true
+    cmds:
+      - |
+        TOKEN=$(docker compose -f examples/docker-compose.split.yml exec -T broker crate token | tr -d '[:space:]')
+        echo "export CRATE_TOKEN=$TOKEN"
+        echo "export CRATE_API_URL=http://localhost:7778"
+        echo "export CRATE_PUBLIC_URL=http://localhost:7777"
+
+  docker:e2e:
+    desc: Run all isolated Docker E2E suites (local volume + split S3/rustfs)
+    cmds:
+      - bash scripts/test/docker-e2e.sh all
+
+  docker:e2e:local:
+    desc: Run the split broker/web E2E suite against a named local volume
+    cmds:
+      - bash scripts/test/docker-e2e.sh local
+
+  docker:e2e:s3:
+    desc: Run containerized broker/web E2E against rustfs with scoped IAM
+    cmds:
+      - bash scripts/test/docker-e2e.sh s3
+
   clean:
     desc: Remove build artifacts
     cmds:

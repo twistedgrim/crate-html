@@ -46,6 +46,22 @@ The env vars override anything in `config.yaml` for the lifetime of the shell. U
 
 `task docker:nuke` deletes the volumes too — use when you want a clean slate.
 
+### Optional split broker + web
+
+The same image can run as a private broker and a public, read-only web server:
+
+```bash
+task docker:split:up
+eval "$(task docker:split:env)"    # API=:7778, public URLs=:7777
+./bin/crate push ./my-site demo
+task docker:split:down
+```
+
+The broker owns uploads, deletes, tokens, and expiry cleanup. The web process
+only serves the index and crate URLs from the shared storage volume, mounted
+read-only. They can use separate hostnames or ports; a shared reverse proxy is
+optional. The all-in-one `crated` behavior remains the default.
+
 ### Tailscale (HTTPS on your tailnet)
 
 For a real hostname like `https://crate.<your-tailnet>.ts.net/`, add three [tsdproxy](https://github.com/almeidapaulopt/tsdproxy) labels to the `crated` service in `docker-compose.yml`:
@@ -76,9 +92,18 @@ crate token ls              list minted tokens (id, created, expires, last used)
 crate token revoke <id|name> revoke a minted token immediately
 ```
 
-Site names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. A global `--config <path>` flag (on both `crate` and `crated`) overrides the XDG config-file location.
+Site names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. A global `--config <path>` flag (on both `crate` and `crated`) overrides the XDG config-file location. `crated --role=all|broker|web` selects the runtime role; `CRATE_ROLE` is the container-friendly equivalent.
 
-The daemon checks expiry deadlines once a minute and removes elapsed sites. Expiry metadata is stored separately from site assets, so it is not publicly served. Sites created by older versions without expiry metadata are retained indefinitely.
+`CRATE_API_URL` tells the CLI where the broker lives. `CRATE_PUBLIC_URL` is the
+human-facing origin printed after a push and used by `crate open`.
+`CRATE_BASE_URL` remains backward compatible and supplies both when the new
+variables are unset.
+
+Public reads reject an elapsed site immediately, even if the broker is down.
+The broker checks expiry deadlines once a minute and removes elapsed storage.
+Expiry metadata is stored separately from site assets, so it is not publicly
+served. Sites created by older versions without expiry metadata are retained
+indefinitely.
 
 ## Tokens
 
@@ -130,10 +155,13 @@ To force pure-XDG layout on macOS, set `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XD
 ## Build & test
 
 ```bash
-task build      # go build ./cmd/...
-task test       # go test ./...
-task vet        # go vet ./...
-task tidy       # go mod tidy
+task build       # go build ./cmd/...
+task test        # go test ./...
+task vet         # go vet ./...
+task smoke       # process-level CLI/API integration suite
+task smoke:s3    # real S3 backend tests using rustfs
+task docker:e2e  # isolated container E2E: local volume + scoped-IAM rustfs
+task tidy        # go mod tidy
 ```
 
 ## Docs
@@ -145,7 +173,7 @@ task tidy       # go mod tidy
 - [`docs/naming.md`](docs/naming.md) — naming rationale and availability check
 - [`docs/releases.md`](docs/releases.md) — Conventional Commit and Release Please workflow
 - [`docs/roadmap.md`](docs/roadmap.md) — near-term work and explicit non-goals
-- [`examples/`](examples/) — optional compose overrides (currently: tsdproxy on Tailscale)
+- [`examples/`](examples/) — optional split-role, S3, custom-index, and tsdproxy configurations
 
 ## Inspiration
 

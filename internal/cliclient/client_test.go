@@ -51,6 +51,30 @@ func TestStatusAttachesBearerAndDecodesJSON(t *testing.T) {
 	}
 }
 
+func TestClientDialsExplicitAPIURL(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != wire.PathAPIStatus {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(wire.StatusResponse{Version: "split"})
+	}))
+	defer api.Close()
+
+	client := cliclient.New(config.Config{
+		BaseURL:   "http://legacy.invalid",
+		APIURL:    api.URL,
+		PublicURL: "https://crate.example",
+		Token:     testToken,
+	})
+	st, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Version != "split" {
+		t.Fatalf("version = %q", st.Version)
+	}
+}
+
 func TestListDecodesSites(t *testing.T) {
 	client := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(wire.ListSitesResponse{

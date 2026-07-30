@@ -34,12 +34,14 @@ const (
 // 0.0.0.0 inside a container even when the user wants 127.0.0.1 outside it).
 //
 // There is intentionally no CRATE_PORT — Port is only used to compose
-// default ListenAddr/BaseURL strings, and overriding it without also
-// overriding those would silently no-op. Set CRATE_LISTEN_ADDR (and
-// CRATE_BASE_URL if needed) directly.
+// default ListenAddr and URL strings, and overriding it without also
+// overriding those would silently no-op. Set CRATE_LISTEN_ADDR and the
+// appropriate URL variables directly.
 const (
 	EnvListenAddr    = "CRATE_LISTEN_ADDR"
 	EnvBaseURL       = "CRATE_BASE_URL"
+	EnvAPIURL        = "CRATE_API_URL"
+	EnvPublicURL     = "CRATE_PUBLIC_URL"
 	EnvToken         = "CRATE_TOKEN"
 	EnvIndexTemplate = "CRATE_INDEX_TEMPLATE"
 
@@ -65,8 +67,15 @@ const (
 
 // Config is the on-disk shape of config.yaml.
 type Config struct {
-	// BaseURL is what the CLI dials. Defaults to http://localhost:<Port>.
+	// BaseURL is the legacy combined API/public URL. Existing deployments
+	// continue to use it as the fallback for both APIURL and PublicURL.
 	BaseURL string `yaml:"base_url"`
+	// APIURL is what the CLI dials for broker operations. Empty falls back to
+	// BaseURL so existing single-daemon configurations keep working.
+	APIURL string `yaml:"api_url,omitempty"`
+	// PublicURL is the human-facing origin used for published site links.
+	// Empty falls back to BaseURL.
+	PublicURL string `yaml:"public_url,omitempty"`
 	// ListenAddr is the host:port crated binds. Defaults to 127.0.0.1:<Port>
 	// so the daemon is unreachable from other hosts on the network.
 	ListenAddr string `yaml:"listen_addr"`
@@ -89,6 +98,25 @@ type Config struct {
 	// S3 configures the object-storage backend. Ignored unless StorageBackend
 	// is "s3".
 	S3 S3Config `yaml:"s3"`
+}
+
+// EffectiveAPIURL returns the broker origin after applying the legacy
+// base_url fallback. It also makes directly constructed Config values in
+// tests and embedders behave like configs loaded through this package.
+func (c Config) EffectiveAPIURL() string {
+	if c.APIURL != "" {
+		return c.APIURL
+	}
+	return c.BaseURL
+}
+
+// EffectivePublicURL returns the human-facing origin after applying the
+// legacy base_url fallback.
+func (c Config) EffectivePublicURL() string {
+	if c.PublicURL != "" {
+		return c.PublicURL
+	}
+	return c.BaseURL
 }
 
 // S3Config describes the bucket backing the "s3" storage backend.
@@ -121,9 +149,10 @@ type Paths struct {
 	LogDir     string
 }
 
-// ResolvePaths returns the XDG-backed paths used by crate-html.
-// Directories are created as needed.
-func ResolvePaths() (Paths, error) {
+// resolvePaths returns the XDG-backed paths used by crate-html. Writers create
+// the directories eagerly; read-only callers only derive their names so they
+// can run against a read-only or not-yet-initialized data mount.
+func resolvePaths(create bool) (Paths, error) {
 	configDir := filepath.Join(xdg.ConfigHome, appName)
 	dataDir := filepath.Join(xdg.DataHome, appName)
 	stateDir := filepath.Join(xdg.StateHome, appName)
@@ -131,9 +160,11 @@ func ResolvePaths() (Paths, error) {
 	sitesDir := filepath.Join(dataDir, "sites")
 	logDir := filepath.Join(stateDir, "log")
 
-	for _, d := range []string{configDir, sitesDir, logDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return Paths{}, fmt.Errorf("mkdir %s: %w", d, err)
+	if create {
+		for _, d := range []string{configDir, sitesDir, logDir} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				return Paths{}, fmt.Errorf("mkdir %s: %w", d, err)
+			}
 		}
 	}
 
@@ -143,6 +174,19 @@ func ResolvePaths() (Paths, error) {
 		SitesDir:   sitesDir,
 		LogDir:     logDir,
 	}, nil
+}
+
+// ResolvePaths returns the XDG-backed paths used by crate-html and creates the
+// directories needed by the broker and CLI.
+func ResolvePaths() (Paths, error) {
+	return resolvePaths(true)
+}
+
+// ResolvePathsReadOnly derives the XDG-backed paths without creating anything.
+// The public web role uses this so its config, data, and state mounts can all
+// be genuinely read-only.
+func ResolvePathsReadOnly() (Paths, error) {
+	return resolvePaths(false)
 }
 
 // LoadOrInit reads the config file, creating a default one (with a freshly
@@ -172,6 +216,35 @@ func LoadOrInit(paths Paths) (Config, error) {
 	}
 	applyDefaults(&cfg)
 	applyEnv(&cfg)
+	return cfg, nil
+}
+
+// LoadReadOnly loads configuration without creating a config file or root
+// token. It is intended for the public web role, which only needs storage and
+// presentation settings and should not require access to broker credentials.
+//
+// If a config file is supplied it may contain a token for compatibility with
+// existing deployments, but the returned config always clears it.
+func LoadReadOnly(paths Paths) (Config, error) {
+	data, err := os.ReadFile(paths.ConfigFile)
+	if errors.Is(err, os.ErrNotExist) {
+		var cfg Config
+		applyDefaults(&cfg)
+		applyEnv(&cfg)
+		cfg.Token = ""
+		return cfg, nil
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("parse config: %w", err)
+	}
+	applyDefaults(&cfg)
+	applyEnv(&cfg)
+	cfg.Token = ""
 	return cfg, nil
 }
 
@@ -253,6 +326,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv(EnvBaseURL); v != "" {
 		cfg.BaseURL = v
+	}
+	if v := os.Getenv(EnvAPIURL); v != "" {
+		cfg.APIURL = v
+	}
+	if v := os.Getenv(EnvPublicURL); v != "" {
+		cfg.PublicURL = v
 	}
 	if v := os.Getenv(EnvToken); v != "" {
 		cfg.Token = v

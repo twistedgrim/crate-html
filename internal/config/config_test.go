@@ -55,17 +55,24 @@ func TestApplyDefaults(t *testing.T) {
 			if cfg.BaseURL != c.wantBase {
 				t.Errorf("BaseURL: got %q, want %q", cfg.BaseURL, c.wantBase)
 			}
+			if cfg.EffectiveAPIURL() != c.wantBase {
+				t.Errorf("EffectiveAPIURL: got %q, want %q", cfg.EffectiveAPIURL(), c.wantBase)
+			}
+			if cfg.EffectivePublicURL() != c.wantBase {
+				t.Errorf("EffectivePublicURL: got %q, want %q", cfg.EffectivePublicURL(), c.wantBase)
+			}
 		})
 	}
 }
 
 func TestApplyEnv(t *testing.T) {
 	// Save + restore env so the test doesn't leak.
-	for _, k := range []string{EnvListenAddr, EnvBaseURL, EnvToken} {
+	for _, k := range []string{EnvListenAddr, EnvBaseURL, EnvAPIURL, EnvPublicURL, EnvToken} {
 		t.Setenv(k, "")
 	}
 
 	cfg := Config{ListenAddr: "127.0.0.1:7777", BaseURL: "http://localhost:7777", Token: "from-file"}
+	applyDefaults(&cfg)
 	applyEnv(&cfg)
 	if cfg.ListenAddr != "127.0.0.1:7777" || cfg.Token != "from-file" {
 		t.Errorf("no env vars set: config should be unchanged; got %+v", cfg)
@@ -81,8 +88,55 @@ func TestApplyEnv(t *testing.T) {
 	if cfg.BaseURL != "http://override:7777" {
 		t.Errorf("BaseURL: got %q", cfg.BaseURL)
 	}
+	if cfg.EffectiveAPIURL() != "http://override:7777" || cfg.EffectivePublicURL() != "http://override:7777" {
+		t.Errorf("legacy base URL should supply both fallbacks; got api=%q public=%q", cfg.EffectiveAPIURL(), cfg.EffectivePublicURL())
+	}
 	if cfg.Token != "env-token" {
 		t.Errorf("Token: got %q", cfg.Token)
+	}
+
+	t.Setenv(EnvAPIURL, "http://broker:7777")
+	t.Setenv(EnvPublicURL, "https://crate.example")
+	applyEnv(&cfg)
+	if cfg.APIURL != "http://broker:7777" {
+		t.Errorf("APIURL: got %q", cfg.APIURL)
+	}
+	if cfg.PublicURL != "https://crate.example" {
+		t.Errorf("PublicURL: got %q", cfg.PublicURL)
+	}
+}
+
+func TestLegacyBaseEnvDoesNotOverwriteExplicitDestinations(t *testing.T) {
+	t.Setenv(EnvBaseURL, "http://legacy-env:7777")
+	t.Setenv(EnvAPIURL, "")
+	t.Setenv(EnvPublicURL, "")
+	cfg := Config{
+		BaseURL:   "http://legacy-file:7777",
+		APIURL:    "http://broker:7777",
+		PublicURL: "https://crate.example",
+	}
+	applyDefaults(&cfg)
+	applyEnv(&cfg)
+	if got := cfg.EffectiveAPIURL(); got != "http://broker:7777" {
+		t.Fatalf("EffectiveAPIURL = %q", got)
+	}
+	if got := cfg.EffectivePublicURL(); got != "https://crate.example" {
+		t.Fatalf("EffectivePublicURL = %q", got)
+	}
+}
+
+func TestExplicitURLsOverrideLegacyFallback(t *testing.T) {
+	cfg := Config{
+		BaseURL:   "http://legacy:7777",
+		APIURL:    "http://broker:7777",
+		PublicURL: "https://crate.example",
+	}
+	applyDefaults(&cfg)
+	if got := cfg.EffectiveAPIURL(); got != "http://broker:7777" {
+		t.Fatalf("EffectiveAPIURL = %q", got)
+	}
+	if got := cfg.EffectivePublicURL(); got != "https://crate.example" {
+		t.Fatalf("EffectivePublicURL = %q", got)
 	}
 }
 
@@ -151,6 +205,36 @@ token: known-token
 	}
 }
 
+func TestLoadReadOnlyDoesNotCreateConfigOrKeepToken(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "missing", "config.yaml")
+	cfg, err := LoadReadOnly(Paths{ConfigFile: cfgPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "" {
+		t.Fatalf("read-only config should not contain a token: %q", cfg.Token)
+	}
+	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+		t.Fatalf("read-only load created config file: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "base_url: http://legacy:7777\ntoken: broker-secret\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadReadOnly(Paths{ConfigFile: cfgPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "" {
+		t.Fatal("read-only load retained the broker token")
+	}
+}
+
 func TestLoadOrInitEnvOverrideDoesNotRewriteFile(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.yaml")
@@ -211,6 +295,20 @@ func TestResolvePathsHonorsXDG(t *testing.T) {
 	}
 	if !strings.HasSuffix(paths.LogDir, "/crate/log") {
 		t.Errorf("LogDir suffix: %s", paths.LogDir)
+	}
+}
+
+func TestResolvePathsReadOnlyMatchesWritablePaths(t *testing.T) {
+	readOnly, err := ResolvePathsReadOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writable, err := ResolvePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readOnly != writable {
+		t.Fatalf("read-only paths differ: got %+v, want %+v", readOnly, writable)
 	}
 }
 
