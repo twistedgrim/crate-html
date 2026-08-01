@@ -9,6 +9,9 @@ const HeaderAuth = "Authorization"
 // HeaderExpires carries either a Go duration (for example "24h") or "never".
 const HeaderExpires = "X-Crate-Expires"
 
+// HeaderRequestID correlates a broker API response with its daemon logs.
+const HeaderRequestID = "X-Request-ID"
+
 // Path constants for the daemon API.
 const (
 	PathAPISites  = "/api/sites"

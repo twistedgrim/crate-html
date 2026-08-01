@@ -28,6 +28,10 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
 - **Agent-neutral crate-push skill.** `.agents/skills/crate-push` packages the
   publish workflow for agents that use the standard `.agents` skill layout;
   the existing Claude Code skill remains available for that integration.
+- **Broker structured logging.** Broker API requests carry correlation IDs and
+  emit route, status, duration, byte-count, and secret-safe actor fields.
+  Successful mutations add resource-specific events. Text and JSON formats
+  write to stderr without logging public site traffic or health checks.
 - **Go integration suite (`task smoke`).** ~30 tests under `tests/smoke/` (build tag `smoke`) covering lifecycle (status/ls/rm/push), bearer-token enforcement on each `/api/sites/*` verb, path-traversal rejection in URLs and tarballs, built-in cratesplainer serving + disk-shadowing, push variants (dir / stdin / pre-built tar / `--open`), `--config` flag, and `CRATE_TOKEN` env override. Replaces the original bash harness.
 - **Unit-test coverage** across `internal/`:
   - `storage` (existing) — ValidateName, atomic replace, traversal, symlinks, write→read round-trip.
@@ -71,7 +75,6 @@ A bare-bones Helm chart or kustomize overlay that runs `crated` behind a Gateway
 
 ### Daemon / observability
 
-- **Structured JSON logs** (`--log-format=json` and `CRATE_LOG_FORMAT`). Switch `crated`'s logger to `log/slog` and add request-log middleware. Feeds cleanly into any log aggregator. A local WIP branch exists.
 - **`/metrics` Prometheus endpoint** — site count, push success/fail counters, request-latency histogram. Public like `/api/status`. Gate behind `--metrics` if we want to keep the base binary lean.
 
 ### Speculative

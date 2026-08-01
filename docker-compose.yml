@@ -15,7 +15,7 @@ services:
     # accepts connections forwarded by Docker. Override here if you want a
     # different port inside the container.
     healthcheck:
-      test: ["CMD", "/usr/local/bin/crate", "status"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7777/healthz"]
       interval: 10s
       timeout: 3s
       retries: 3

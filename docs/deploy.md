@@ -41,7 +41,7 @@ The image is a multi-stage build (~34 MB on `alpine:3.22`). Inside the container
 - `crated` binds `0.0.0.0:7777` (`CRATE_LISTEN_ADDR` env override in the Dockerfile).
 - Config lives in the `crate-config` named volume mounted at `/config`. Token: `/config/crate/config.yaml` (XDG layout — `crate/` subdir is part of the app's path).
 - Sites live in the `crate-data` named volume mounted at `/data`. Site files: `/data/crate/sites/<name>/`.
-- Healthcheck runs `crate status` every 10s.
+- Healthcheck calls `/healthz` every 10s without adding broker request-log noise.
 
 `task docker:down` preserves both volumes; `task docker:nuke` deletes them (calls `docker compose down -v`).
 

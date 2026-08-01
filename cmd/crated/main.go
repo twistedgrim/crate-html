@@ -4,8 +4,7 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,8 +22,9 @@ import (
 )
 
 type cli struct {
-	Config string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
-	Role   string `help:"Runtime role: all serves public sites and the broker API; web is public/read-only; broker owns the API and cleanup." default:"all" enum:"all,web,broker" env:"CRATE_ROLE"`
+	Config    string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
+	Role      string `help:"Runtime role: all serves public sites and the broker API; web is public/read-only; broker owns the API and cleanup." default:"all" enum:"all,web,broker" env:"CRATE_ROLE"`
+	LogFormat string `help:"Daemon log format." default:"text" enum:"text,json" env:"CRATE_LOG_FORMAT" name:"log-format"`
 }
 
 func main() {
@@ -35,7 +35,7 @@ func main() {
 		kong.UsageOnError(),
 	)
 	if err := run(root); err != nil {
-		fmt.Fprintln(os.Stderr, "crated:", err)
+		loggerForFormat(root.LogFormat).Error("crated failed", "err", err)
 		os.Exit(1)
 	}
 }
@@ -46,7 +46,7 @@ func main() {
 //
 // The S3 backend contacts the bucket here so an unreachable endpoint or a
 // missing bucket stops the daemon at startup instead of failing the first push.
-func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (server.Backend, error) {
+func openStore(cfg config.Config, paths config.Paths, logger *slog.Logger) (server.Backend, error) {
 	if cfg.StorageBackend == config.BackendS3 {
 		store, err := s3store.New(context.Background(), s3store.Config{
 			Endpoint:     cfg.S3.Endpoint,
@@ -62,13 +62,18 @@ func openStore(cfg config.Config, paths config.Paths, logger *log.Logger) (serve
 		if err != nil {
 			return nil, err
 		}
-		logger.Printf("sites:  s3://%s/%s (%s)", cfg.S3.Bucket, cfg.S3.Prefix, cfg.S3.Endpoint)
+		logger.Info("storage ready",
+			"backend", config.BackendS3,
+			"bucket", cfg.S3.Bucket,
+			"prefix", cfg.S3.Prefix,
+			"endpoint", cfg.S3.Endpoint,
+		)
 		return store, nil
 	}
 
 	store := storage.New(paths.SitesDir)
 	store.SetMaxSiteBytes(cfg.MaxUploadBytes)
-	logger.Printf("sites:  %s", paths.SitesDir)
+	logger.Info("storage ready", "backend", config.BackendLocal, "path", paths.SitesDir)
 	return store, nil
 }
 
@@ -121,15 +126,18 @@ func run(root cli) error {
 		return err
 	}
 
-	logger := log.New(os.Stderr, "crated ", log.LstdFlags|log.Lmsgprefix)
-	logger.Printf("role:   %s", root.Role)
-	logger.Printf("config: %s", paths.ConfigFile)
-	logger.Printf("listen: %s", cfg.ListenAddr)
+	logger := loggerForFormat(root.LogFormat)
+	logger.Info("daemon starting",
+		"version", server.Version,
+		"role", root.Role,
+		"config", paths.ConfigFile,
+		"listen", cfg.ListenAddr,
+	)
 	if root.Role != "web" {
-		logger.Printf("api:    %s", cfg.EffectiveAPIURL())
+		logger.Info("broker endpoint", "url", cfg.EffectiveAPIURL())
 	}
 	if root.Role != "broker" {
-		logger.Printf("public: %s", cfg.EffectivePublicURL())
+		logger.Info("public endpoint", "url", cfg.EffectivePublicURL())
 	}
 
 	store, err := openStore(cfg, paths, logger)
@@ -162,7 +170,7 @@ func run(root cli) error {
 		if err := srv.UseIndexTemplateFile(cfg.IndexTemplate); err != nil {
 			return err
 		}
-		logger.Printf("index:  %s (custom)", cfg.IndexTemplate)
+		logger.Info("custom index ready", "path", cfg.IndexTemplate)
 	}
 
 	var handler http.Handler
@@ -194,7 +202,7 @@ func run(root cli) error {
 
 	select {
 	case <-ctx.Done():
-		logger.Println("shutdown signal received")
+		logger.Info("shutdown signal received")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return httpSrv.Shutdown(shutdownCtx)
@@ -206,15 +214,15 @@ func run(root cli) error {
 	}
 }
 
-func watchExpiries(ctx context.Context, srv *server.Server, logger *log.Logger, interval time.Duration) {
+func watchExpiries(ctx context.Context, srv *server.Server, logger *slog.Logger, interval time.Duration) {
 	remove := func() {
 		deleted, err := srv.DeleteExpired(time.Now())
 		if err != nil {
-			logger.Printf("expiry cleanup: %v", err)
+			logger.Error("expiry cleanup failed", "err", err)
 			return
 		}
 		for _, name := range deleted {
-			logger.Printf("expired site %s", name)
+			logger.Info("site expired", "site", name)
 		}
 	}
 	remove()
@@ -228,4 +236,11 @@ func watchExpiries(ctx context.Context, srv *server.Server, logger *log.Logger, 
 			remove()
 		}
 	}
+}
+
+func loggerForFormat(format string) *slog.Logger {
+	if format == "json" {
+		return slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, nil))
 }
