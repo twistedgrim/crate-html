@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crate Push"
+  short_description: "Publish static HTML to crate-html"
+  default_prompt: "Use $crate-push to publish this HTML directory and return its URL."
