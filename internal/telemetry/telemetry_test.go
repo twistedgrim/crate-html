@@ -47,6 +47,7 @@ func TestStartPrometheusReturnsOnlyAnOperationalHandler(t *testing.T) {
 		t.Fatal("Prometheus exporter did not provide an operational handler")
 	}
 	provider.Metrics().Mutation("push", "success")
+	provider.Metrics().HTTP(http.MethodGet, "/api/status", http.StatusOK, 20*time.Millisecond, 0)
 	response := httptest.NewRecorder()
 	provider.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
 	if response.Code != 200 {
@@ -54,6 +55,10 @@ func TestStartPrometheusReturnsOnlyAnOperationalHandler(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "crate_broker_mutations") {
 		t.Fatalf("Prometheus output did not include broker metric: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `crate_broker_http_request_duration_seconds_bucket`) ||
+		!strings.Contains(response.Body.String(), `le="0.025"`) {
+		t.Fatalf("Prometheus duration histogram did not include sub-second buckets: %s", response.Body.String())
 	}
 	notFound := httptest.NewRecorder()
 	provider.Handler().ServeHTTP(notFound, httptest.NewRequest(http.MethodGet, "/", nil))

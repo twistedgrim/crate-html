@@ -67,7 +67,7 @@ jobs:
           CRATE_E2E_SKIP_BUILD: "1"
         run: bash scripts/test/docker-e2e.sh all
 
-      - name: Docker metrics smoke (broker + Prometheus)
+      - name: Docker metrics smoke (broker + Prometheus + Grafana)
         env:
           CRATE_METRICS_E2E_IMAGE: crate-html:ci
           CRATE_METRICS_E2E_SKIP_BUILD: "1"

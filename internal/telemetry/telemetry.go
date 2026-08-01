@@ -115,13 +115,36 @@ func Start(ctx context.Context) (*Provider, error) {
 		return nil, fmt.Errorf("unsupported %s %q (want none, prometheus, or otlp)", EnvMetricsExporter, mode)
 	}
 
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	provider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(reader),
+		sdkmetric.WithView(durationHistogramView()),
+	)
 	return &Provider{
 		metrics:  newMetrics(provider.Meter("github.com/Twistedgrim/crate-html/broker")),
 		handler:  handler,
 		shutdown: provider.Shutdown,
 		mode:     mode,
 	}, nil
+}
+
+// durationHistogramView keeps the exported buckets in seconds while retaining
+// useful resolution for sub-second broker operations. The SDK defaults are
+// 0, 5, 10, ... which are appropriate for millisecond-valued histograms, but
+// make nearly every broker request fall into the first five-second bucket.
+func durationHistogramView() sdkmetric.View {
+	return sdkmetric.NewView(
+		sdkmetric.Instrument{
+			Name: "crate.broker.*.duration",
+			Kind: sdkmetric.InstrumentKindHistogram,
+			Unit: "s",
+		},
+		sdkmetric.Stream{
+			Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10},
+				NoMinMax:   true,
+			},
+		},
+	)
 }
 
 type periodicReaderConfig struct {

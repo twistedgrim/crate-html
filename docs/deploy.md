@@ -98,7 +98,7 @@ access to the broker; humans only need network access to web.
 With local storage, both containers must see the same volume on one Docker
 host. To place them on different hosts, use the S3 backend.
 
-### Broker metrics with Prometheus
+### Broker metrics with Prometheus and Grafana
 
 Broker application metrics are off by default. Select Prometheus explicitly
 with standard OpenTelemetry configuration; `crated` then creates a separate
@@ -106,12 +106,12 @@ operational listener (default `127.0.0.1:9464`). It never registers `/metrics`
 on the public crate listener. The `web` role does not initialize or expose
 broker metrics, even if these variables are present.
 
-For a ready-to-run split example, use the Prometheus overlay:
+For a ready-to-run split example, use the Prometheus and Grafana overlay:
 
 ```bash
 task docker:metrics:config
 task docker:metrics:up
-open http://localhost:9090
+open http://localhost:3000/d/crate-broker/crate-html-broker
 ```
 
 The overlay sets these on the broker:
@@ -123,9 +123,16 @@ CRATE_METRICS_ADDR: 0.0.0.0:9464
 
 Port 9464 is `expose`d only on Compose's private network, where Prometheus
 scrapes `broker:9464`; it is deliberately not in `ports`. Prometheus's own UI
-is published on port 9090 for local operator access. See
+is published on port 9090, and Grafana is published on port 3000 with
+anonymous Viewer access for this local-only example. Grafana provisions the
+Prometheus datasource and the read-only **crate-html Broker** dashboard from
+files committed in `examples/grafana`, so restarting the example always
+recreates the reviewed dashboard. The dashboard covers stored sites, request
+rate and latency, server errors, authentication rejections, mutations, storage
+operations, upload throughput, and expiry cleanup. See
 [`../examples/docker-compose.prometheus.yml`](../examples/docker-compose.prometheus.yml)
-and [`../examples/prometheus.yml`](../examples/prometheus.yml).
+and [`../examples/prometheus.yml`](../examples/prometheus.yml). Run
+`task docker:metrics:down` when finished; the Grafana data volume is preserved.
 
 ### Broker metrics with OTLP and Knative
 

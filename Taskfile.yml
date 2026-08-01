@@ -153,23 +153,23 @@ tasks:
         echo "export CRATE_PUBLIC_URL=http://localhost:7777"
 
   docker:metrics:config:
-    desc: Validate the split Docker + Prometheus metrics example
+    desc: Validate the split Docker + Prometheus + Grafana metrics example
     cmds:
       - docker compose -f examples/docker-compose.split.yml -f examples/docker-compose.prometheus.yml config -q
 
   docker:metrics:up:
-    desc: Start the split broker/web stack with internal broker metrics and Prometheus on :9090
+    desc: Start split broker/web with Prometheus on :9090 and Grafana on :3000
     cmds:
       - docker compose -f examples/docker-compose.split.yml -f examples/docker-compose.prometheus.yml up -d --build
       - docker compose -f examples/docker-compose.split.yml -f examples/docker-compose.prometheus.yml ps
 
   docker:metrics:down:
-    desc: Stop the split Docker + Prometheus metrics example (volumes preserved)
+    desc: Stop the split Docker + Prometheus + Grafana metrics example (volumes preserved)
     cmds:
       - docker compose -f examples/docker-compose.split.yml -f examples/docker-compose.prometheus.yml down
 
   docker:metrics:smoke:
-    desc: Run an isolated broker + Prometheus metrics scrape smoke test
+    desc: Run an isolated broker + Prometheus + Grafana metrics smoke test
     cmds:
       - bash scripts/test/docker-metrics-smoke.sh
 
