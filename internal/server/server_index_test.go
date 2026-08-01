@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -131,7 +130,7 @@ func newServerWithConfig(t *testing.T) (*server.Server, *storage.Store) {
 	t.Helper()
 	store := storage.New(t.TempDir())
 	cfg := config.Config{ListenAddr: "127.0.0.1:0", Token: testToken}
-	return server.New(cfg, store, nil, nil, log.New(io.Discard, "", 0)), store
+	return server.New(cfg, store, nil, nil, discardLogger()), store
 }
 
 func TestCustomIndexTemplate(t *testing.T) {

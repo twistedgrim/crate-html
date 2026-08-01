@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +30,10 @@ import (
 
 const testToken = "server-test-token"
 
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 // newTestServer wires a Server with isolated storage and optional builtins
 // behind an httptest.NewServer. Returns the httptest URL so tests can dial it.
 func newTestServer(t *testing.T, builtins []builtin.Site) (*httptest.Server, *storage.Store) {
@@ -48,7 +52,7 @@ func newTestServerWithTokens(t *testing.T, builtins []builtin.Site) (*httptest.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := discardLogger()
 	cfg := config.Config{
 		BaseURL:        "", // populated below once the httptest URL is known
 		ListenAddr:     "127.0.0.1:0",
@@ -118,7 +122,7 @@ func TestRoleHandlerRouteBoundaries(t *testing.T) {
 				Token:          testToken,
 				MaxUploadBytes: 1 << 20,
 			}
-			logger := log.New(io.Discard, "", 0)
+			logger := discardLogger()
 			var srv *server.Server
 			var handler http.Handler
 			switch tc.role {
@@ -195,7 +199,7 @@ func TestPublicHandlerHidesExpiredSitesAndIndexRows(t *testing.T) {
 	}
 	time.Sleep(2 * time.Millisecond)
 
-	srv := server.NewReadOnly(config.Config{}, store, nil, log.New(io.Discard, "", 0))
+	srv := server.NewReadOnly(config.Config{}, store, nil, discardLogger())
 	ts := httptest.NewServer(srv.PublicHandler())
 	defer ts.Close()
 
@@ -424,7 +428,7 @@ func TestPutSiteReturnsConfiguredPublicURL(t *testing.T) {
 		Token:          testToken,
 		MaxUploadBytes: 1 << 20,
 	}
-	srv := server.New(cfg, store, tokens, nil, log.New(io.Discard, "", 0))
+	srv := server.New(cfg, store, tokens, nil, discardLogger())
 	ts := httptest.NewServer(srv.BrokerHandler())
 	defer ts.Close()
 
@@ -592,7 +596,7 @@ func TestBrokerSerializesAllSiteMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{BaseURL: "http://localhost", Token: testToken, MaxUploadBytes: 1 << 20}
-	srv := server.New(cfg, backend, tokens, nil, log.New(io.Discard, "", 0))
+	srv := server.New(cfg, backend, tokens, nil, discardLogger())
 	ts := httptest.NewServer(srv.BrokerHandler())
 	defer ts.Close()
 
@@ -642,7 +646,7 @@ func TestSlowUploadDoesNotBlockDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{BaseURL: "http://localhost", Token: testToken, MaxUploadBytes: 1 << 20}
-	srv := server.New(cfg, backend, tokens, nil, log.New(io.Discard, "", 0))
+	srv := server.New(cfg, backend, tokens, nil, discardLogger())
 	ts := httptest.NewServer(srv.BrokerHandler())
 	defer ts.Close()
 

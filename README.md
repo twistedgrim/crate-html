@@ -62,6 +62,18 @@ only serves the index and crate URLs from the shared storage volume, mounted
 read-only. They can use separate hostnames or ports; a shared reverse proxy is
 optional. The all-in-one `crated` behavior remains the default.
 
+### Broker logging
+
+`crated` writes structured daemon logs to stderr. Broker API requests include a
+request ID, route, status, duration, byte counts, and a secret-safe actor
+identity. Successful site and token mutations emit a second event with the
+affected resource details. Public site traffic and `/healthz` checks are not
+request-logged.
+
+Text output is the default. Use `crated --log-format=json` or set
+`CRATE_LOG_FORMAT=json` for ingestion by a log collector. In Docker, view the
+same stream with `task docker:logs` or `task docker:split:logs`.
+
 ### Tailscale (HTTPS on your tailnet)
 
 For a real hostname like `https://crate.<your-tailnet>.ts.net/`, add three [tsdproxy](https://github.com/almeidapaulopt/tsdproxy) labels to the `crated` service in `docker-compose.yml`:
@@ -93,6 +105,9 @@ crate token revoke <id|name> revoke a minted token immediately
 ```
 
 Site names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. A global `--config <path>` flag (on both `crate` and `crated`) overrides the XDG config-file location. `crated --role=all|broker|web` selects the runtime role; `CRATE_ROLE` is the container-friendly equivalent.
+
+`crated --log-format=text|json` selects the daemon log encoding;
+`CRATE_LOG_FORMAT` is the container-friendly equivalent.
 
 `CRATE_API_URL` tells the CLI where the broker lives. `CRATE_PUBLIC_URL` is the
 human-facing origin printed after a push and used by `crate open`.

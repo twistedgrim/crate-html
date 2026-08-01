@@ -5,15 +5,18 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -52,7 +55,7 @@ type Server struct {
 	mutable    Backend
 	tokens     *token.Store
 	cfg        config.Config
-	log        *log.Logger
+	log        *slog.Logger
 	builtins   []builtin.Site
 	indexTmpl  *template.Template
 	mutationMu sync.Mutex
@@ -60,9 +63,9 @@ type Server struct {
 
 // New returns a Server. Pass nil for builtins to skip embedded sites and nil
 // for tokens to accept only the root config token.
-func New(cfg config.Config, store Backend, tokens *token.Store, builtins []builtin.Site, logger *log.Logger) *Server {
+func New(cfg config.Config, store Backend, tokens *token.Store, builtins []builtin.Site, logger *slog.Logger) *Server {
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
 	return &Server{
 		store: store, mutable: store, tokens: tokens, cfg: cfg, log: logger,
@@ -73,9 +76,9 @@ func New(cfg config.Config, store Backend, tokens *token.Store, builtins []built
 // NewReadOnly returns a Server with no mutation backend or token store. It is
 // used by the public web role so only read operations are reachable from that
 // process's HTTP layer.
-func NewReadOnly(cfg config.Config, store ReadBackend, builtins []builtin.Site, logger *log.Logger) *Server {
+func NewReadOnly(cfg config.Config, store ReadBackend, builtins []builtin.Site, logger *slog.Logger) *Server {
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
 	return &Server{
 		store: store, cfg: cfg, log: logger, builtins: builtins, indexTmpl: defaultIndexTmpl,
@@ -139,17 +142,142 @@ func (s *Server) PublicHandler() http.Handler {
 }
 
 func (s *Server) registerBrokerRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("GET /api/sites", s.requireAuth(s.handleListSites))
-	mux.HandleFunc("PUT /api/sites/{name}", s.requireAuth(s.handlePutSite))
-	mux.HandleFunc("DELETE /api/sites/{name}", s.requireAuth(s.handleDeleteSite))
+	s.registerBrokerRoute(mux, "GET /api/status", "/api/status", s.handleStatus)
+	s.registerBrokerRoute(mux, "GET /api/sites", "/api/sites", s.requireAuth(s.handleListSites))
+	s.registerBrokerRoute(mux, "PUT /api/sites/{name}", "/api/sites/{name}", s.requireAuth(s.handlePutSite))
+	s.registerBrokerRoute(mux, "DELETE /api/sites/{name}", "/api/sites/{name}", s.requireAuth(s.handleDeleteSite))
 
 	// Token management is root-only: minted tokens can manage sites but can
 	// never mint, list, or revoke tokens. This keeps privilege escalation
 	// off the table without introducing scopes.
-	mux.HandleFunc("POST /api/tokens", s.requireRoot(s.handleCreateToken))
-	mux.HandleFunc("GET /api/tokens", s.requireRoot(s.handleListTokens))
-	mux.HandleFunc("DELETE /api/tokens/{id}", s.requireRoot(s.handleRevokeToken))
+	s.registerBrokerRoute(mux, "POST /api/tokens", "/api/tokens", s.requireRoot(s.handleCreateToken))
+	s.registerBrokerRoute(mux, "GET /api/tokens", "/api/tokens", s.requireRoot(s.handleListTokens))
+	s.registerBrokerRoute(mux, "DELETE /api/tokens/{id}", "/api/tokens/{id}", s.requireRoot(s.handleRevokeToken))
+}
+
+func (s *Server) registerBrokerRoute(mux *http.ServeMux, pattern, route string, next http.HandlerFunc) {
+	mux.Handle(pattern, s.logBrokerRequest(route, next))
+}
+
+type brokerAudit struct {
+	requestID string
+	authKind  string
+	tokenID   string
+	tokenName string
+	rejection string
+}
+
+type brokerAuditContextKey struct{}
+
+type brokerResponseRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *brokerResponseRecorder) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *brokerResponseRecorder) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
+}
+
+func (w *brokerResponseRecorder) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+type countingRequestBody struct {
+	io.ReadCloser
+	bytes int64
+}
+
+func (r *countingRequestBody) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	r.bytes += int64(n)
+	return n, err
+}
+
+func (s *Server) logBrokerRequest(route string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		audit := &brokerAudit{requestID: newRequestID(), authKind: "anonymous"}
+		r = r.WithContext(context.WithValue(r.Context(), brokerAuditContextKey{}, audit))
+		body := &countingRequestBody{ReadCloser: r.Body}
+		r.Body = body
+		w.Header().Set(wire.HeaderRequestID, audit.requestID)
+		recorder := &brokerResponseRecorder{ResponseWriter: w}
+
+		next.ServeHTTP(recorder, r)
+		if recorder.status == 0 {
+			recorder.status = http.StatusOK
+		}
+		attrs := []any{
+			"request_id", audit.requestID,
+			"method", r.Method,
+			"route", route,
+			"path", r.URL.Path,
+			"status", recorder.status,
+			"duration_ms", time.Since(started).Milliseconds(),
+			"content_length", r.ContentLength,
+			"request_bytes", body.bytes,
+			"response_bytes", recorder.bytes,
+			"auth_kind", audit.authKind,
+		}
+		if audit.tokenID != "" {
+			attrs = append(attrs, "token_id", audit.tokenID, "token_name", audit.tokenName)
+		}
+		if audit.rejection != "" {
+			attrs = append(attrs, "rejection", audit.rejection)
+		}
+		switch {
+		case recorder.status >= http.StatusInternalServerError:
+			s.log.ErrorContext(r.Context(), "broker request", attrs...)
+		case recorder.status >= http.StatusBadRequest:
+			s.log.WarnContext(r.Context(), "broker request", attrs...)
+		default:
+			s.log.InfoContext(r.Context(), "broker request", attrs...)
+		}
+	})
+}
+
+func newRequestID() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+func auditFromRequest(r *http.Request) *brokerAudit {
+	audit, _ := r.Context().Value(brokerAuditContextKey{}).(*brokerAudit)
+	return audit
+}
+
+func markRejection(r *http.Request, reason string) {
+	if audit := auditFromRequest(r); audit != nil && audit.rejection == "" {
+		audit.rejection = reason
+	}
+}
+
+func (s *Server) logRequestEvent(r *http.Request, level slog.Level, message string, attrs ...any) {
+	if audit := auditFromRequest(r); audit != nil {
+		base := []any{"request_id", audit.requestID, "auth_kind", audit.authKind}
+		if audit.tokenID != "" {
+			base = append(base, "token_id", audit.tokenID, "token_name", audit.tokenName)
+		}
+		attrs = append(base, attrs...)
+	}
+	s.log.Log(r.Context(), level, message, attrs...)
 }
 
 func (s *Server) registerPublicRoutes(mux *http.ServeMux) {
@@ -176,18 +304,32 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		got := bearer(r)
 		if got == "" {
+			if audit := auditFromRequest(r); audit != nil {
+				audit.rejection = "missing_bearer"
+			}
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
 		if s.isRoot(got) {
+			if audit := auditFromRequest(r); audit != nil {
+				audit.authKind = "root"
+			}
 			next(w, r)
 			return
 		}
 		if s.tokens != nil {
-			if _, ok := s.tokens.Verify(got, time.Now()); ok {
+			if rec, ok := s.tokens.Verify(got, time.Now()); ok {
+				if audit := auditFromRequest(r); audit != nil {
+					audit.authKind = "token"
+					audit.tokenID = rec.ID
+					audit.tokenName = rec.Name
+				}
 				next(w, r)
 				return
 			}
+		}
+		if audit := auditFromRequest(r); audit != nil {
+			audit.rejection = "invalid_token"
 		}
 		writeError(w, http.StatusUnauthorized, "invalid token")
 	}
@@ -198,27 +340,43 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		got := bearer(r)
 		if got == "" {
+			if audit := auditFromRequest(r); audit != nil {
+				audit.rejection = "missing_bearer"
+			}
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
 		if s.isRoot(got) {
+			if audit := auditFromRequest(r); audit != nil {
+				audit.authKind = "root"
+			}
 			next(w, r)
 			return
 		}
 		// A valid minted token is authenticated but not authorized here.
 		if s.tokens != nil {
-			if _, ok := s.tokens.Verify(got, time.Now()); ok {
+			if rec, ok := s.tokens.Verify(got, time.Now()); ok {
+				if audit := auditFromRequest(r); audit != nil {
+					audit.authKind = "token"
+					audit.tokenID = rec.ID
+					audit.tokenName = rec.Name
+					audit.rejection = "root_required"
+				}
 				writeError(w, http.StatusForbidden, "token management requires the root token")
 				return
 			}
+		}
+		if audit := auditFromRequest(r); audit != nil {
+			audit.rejection = "invalid_token"
 		}
 		writeError(w, http.StatusUnauthorized, "invalid token")
 	}
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	sites, err := s.store.List()
 	if err != nil {
+		s.logRequestEvent(r, slog.LevelError, "status storage query failed", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -233,9 +391,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, wire.HealthResponse{Version: Version})
 }
 
-func (s *Server) handleListSites(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 	sites, err := s.store.List()
 	if err != nil {
+		s.logRequestEvent(r, slog.LevelError, "site list failed", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -245,6 +404,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := storage.ValidateName(name); err != nil {
+		markRejection(r, "invalid_site_name")
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -252,13 +412,14 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 
 	expiry, err := parseExpiry(r.Header.Get(wire.HeaderExpires))
 	if err != nil {
+		markRejection(r, "invalid_expiry")
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	body := http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes)
 	staged, err := os.CreateTemp("", "crate-upload-*.tar")
 	if err != nil {
-		s.log.Printf("stage upload %s: %v", name, err)
+		s.logRequestEvent(r, slog.LevelError, "site upload staging failed", "site", name, "err", err)
 		writeError(w, http.StatusInternalServerError, "stage upload failed")
 		return
 	}
@@ -269,16 +430,18 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(staged, body); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
+			markRejection(r, "upload_too_large")
 			writeError(w, http.StatusRequestEntityTooLarge,
 				fmt.Sprintf("upload exceeds %d bytes (max_upload_bytes in config.yaml)", s.cfg.MaxUploadBytes))
 			return
 		}
-		s.log.Printf("read upload %s: %v", name, err)
+		markRejection(r, "upload_read_failed")
+		s.logRequestEvent(r, slog.LevelWarn, "site upload read failed", "site", name, "err", err)
 		writeError(w, http.StatusBadRequest, "read upload failed")
 		return
 	}
 	if _, err := staged.Seek(0, io.SeekStart); err != nil {
-		s.log.Printf("rewind upload %s: %v", name, err)
+		s.logRequestEvent(r, slog.LevelError, "site upload rewind failed", "site", name, "err", err)
 		writeError(w, http.StatusInternalServerError, "stage upload failed")
 		return
 	}
@@ -289,18 +452,30 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) || errors.Is(err, storage.ErrSiteTooLarge) {
+			markRejection(r, "upload_too_large")
 			writeError(w, http.StatusRequestEntityTooLarge,
 				fmt.Sprintf("upload exceeds %d bytes (max_upload_bytes in config.yaml)", s.cfg.MaxUploadBytes))
 			return
 		}
 		if errors.Is(err, storage.ErrUnsafePath) {
+			markRejection(r, "unsafe_archive_path")
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		s.log.Printf("put site %s: %v", name, err)
+		s.logRequestEvent(r, slog.LevelError, "site store failed", "site", name, "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	expiresAt := any("never")
+	if site.ExpiresAt != nil {
+		expiresAt = site.ExpiresAt.UTC()
+	}
+	s.logRequestEvent(r, slog.LevelInfo, "site stored",
+		"site", site.Name,
+		"files", site.FileCount,
+		"bytes", site.SizeBytes,
+		"expires_at", expiresAt,
+	)
 	writeJSON(w, http.StatusOK, wire.PutSiteResponse{
 		Site: site,
 		URL:  strings.TrimRight(s.cfg.EffectivePublicURL(), "/") + "/" + name + "/",
@@ -331,17 +506,20 @@ func parseExpiry(value string) (*time.Duration, error) {
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	if s.tokens == nil {
+		s.logRequestEvent(r, slog.LevelError, "token store unavailable")
 		writeError(w, http.StatusInternalServerError, "token store unavailable")
 		return
 	}
 	defer r.Body.Close()
 	var req wire.CreateTokenRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		markRejection(r, "invalid_json")
 		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
 	ttl, err := parseTokenExpiry(req.Expires)
 	if err != nil {
+		markRejection(r, "invalid_token_expiry")
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -350,19 +528,23 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusBadRequest
 		if errors.Is(err, token.ErrDuplicateName) {
 			status = http.StatusConflict
+			markRejection(r, "duplicate_token_name")
+		} else {
+			markRejection(r, "invalid_token_request")
 		}
 		writeError(w, status, err.Error())
 		return
 	}
-	s.log.Printf("token created: %s (%s)", rec.Name, rec.ID)
+	s.logRequestEvent(r, slog.LevelInfo, "token created", "token_id", rec.ID, "token_name", rec.Name)
 	writeJSON(w, http.StatusCreated, wire.CreateTokenResponse{
 		Token: plaintext,
 		Info:  tokenInfo(rec),
 	})
 }
 
-func (s *Server) handleListTokens(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	if s.tokens == nil {
+		s.logRequestEvent(r, slog.LevelError, "token store unavailable")
 		writeError(w, http.StatusInternalServerError, "token store unavailable")
 		return
 	}
@@ -376,19 +558,22 @@ func (s *Server) handleListTokens(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	if s.tokens == nil {
+		s.logRequestEvent(r, slog.LevelError, "token store unavailable")
 		writeError(w, http.StatusInternalServerError, "token store unavailable")
 		return
 	}
 	id := r.PathValue("id")
 	if err := s.tokens.Revoke(id); err != nil {
 		if errors.Is(err, token.ErrNotFound) {
+			markRejection(r, "token_not_found")
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		s.logRequestEvent(r, slog.LevelError, "token revoke failed", "revoked_token", id, "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.log.Printf("token revoked: %s", id)
+	s.logRequestEvent(r, slog.LevelInfo, "token revoked", "revoked_token", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -418,6 +603,7 @@ func parseTokenExpiry(value string) (*time.Duration, error) {
 func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := storage.ValidateName(name); err != nil {
+		markRejection(r, "invalid_site_name")
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -425,12 +611,15 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 	defer s.mutationMu.Unlock()
 	if err := s.mutable.Delete(name); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
+			markRejection(r, "site_not_found")
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		s.logRequestEvent(r, slog.LevelError, "site delete failed", "site", name, "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logRequestEvent(r, slog.LevelInfo, "site deleted", "site", name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -472,7 +661,7 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r) // deleted between Exists and Open
 				return
 			}
-			s.log.Printf("open site %s: %v", name, oerr)
+			s.log.ErrorContext(r.Context(), "open site failed", "site", name, "err", oerr)
 			writeError(w, http.StatusInternalServerError, "open site failed")
 			return
 		}
@@ -670,7 +859,7 @@ func (s *Server) executeIndex(w http.ResponseWriter, view indexView) {
 	// yields a 500, not a 200 with truncated HTML.
 	var buf bytes.Buffer
 	if err := s.indexTmpl.Execute(&buf, view); err != nil {
-		s.log.Printf("render index: %v", err)
+		s.log.Error("render index failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "index render failed")
 		return
 	}

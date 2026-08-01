@@ -70,7 +70,9 @@ Even though v0 binds `127.0.0.1` only, every mutating `/api/sites/*` endpoint re
 
 Reason: if you ever expose the daemon (Caddy, tailnet, anything), retrofitting auth is a code change. Adding it now is a few lines and means the deployment story is "change one config field," not "rewrite the security model."
 
-`/api/status` is intentionally unauthenticated — `crate status` uses it as a liveness probe, and the Docker healthcheck does the same. Static serve paths (`/`, `/<site>/...`) are also public; that's the whole point.
+`/api/status` is intentionally unauthenticated so `crate status` can inspect the
+daemon. Docker healthchecks use the quieter `/healthz` process-liveness route.
+Static serve paths (`/`, `/<site>/...`) are also public; that's the whole point.
 
 ## Env-var overrides on config
 
