@@ -98,6 +98,107 @@ access to the broker; humans only need network access to web.
 With local storage, both containers must see the same volume on one Docker
 host. To place them on different hosts, use the S3 backend.
 
+### Broker metrics with Prometheus and Grafana
+
+Broker application metrics are off by default. Select Prometheus explicitly
+with standard OpenTelemetry configuration; `crated` then creates a separate
+operational listener (default `127.0.0.1:9464`). It never registers `/metrics`
+on the public crate listener. The `web` role does not initialize or expose
+broker metrics, even if these variables are present.
+
+For a ready-to-run split example, use the Prometheus and Grafana overlay:
+
+```bash
+task docker:metrics:config
+task docker:metrics:up
+open http://localhost:3000/d/crate-broker/crate-html-broker
+```
+
+The overlay sets these on the broker:
+
+```yaml
+OTEL_METRICS_EXPORTER: prometheus
+CRATE_METRICS_ADDR: 0.0.0.0:9464
+```
+
+Port 9464 is `expose`d only on Compose's private network, where Prometheus
+scrapes `broker:9464`; it is deliberately not in `ports`. Prometheus's own UI
+is published on port 9090, and Grafana is published on port 3000 with
+anonymous Viewer access for this local-only example. Grafana provisions the
+Prometheus datasource and the read-only **crate-html Broker** dashboard from
+files committed in `examples/grafana`, so restarting the example always
+recreates the reviewed dashboard. The dashboard covers stored sites, request
+rate and latency, server errors, authentication rejections, mutations, storage
+operations, upload throughput, and expiry cleanup. See
+[`../examples/docker-compose.prometheus.yml`](../examples/docker-compose.prometheus.yml)
+and [`../examples/prometheus.yml`](../examples/prometheus.yml). Run
+`task docker:metrics:down` when finished; the Grafana data volume is preserved.
+
+### Broker metrics with OTLP and Knative
+
+For Knative, send application metrics to a central OpenTelemetry Collector
+instead of exposing a per-revision scrape port:
+
+```yaml
+env:
+  - name: OTEL_METRICS_EXPORTER
+    value: otlp
+  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+    value: http://otel-collector.observability.svc.cluster.local:4317
+  - name: OTEL_SERVICE_NAME
+    value: crate-broker
+```
+
+The OTLP exporter honors the standard `OTEL_EXPORTER_OTLP_*` and
+`OTEL_EXPORTER_OTLP_METRICS_*` settings. gRPC is the default; set
+`OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/protobuf` when the collector is
+configured for OTLP/HTTP. With HTTP, `OTEL_EXPORTER_OTLP_ENDPOINT` is a base
+URL and the exporter appends `/v1/metrics`; a signal-specific
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` must contain the complete path, such as
+`http://otel-collector.observability.svc.cluster.local:4318/v1/metrics`. It
+also honors `OTEL_METRIC_EXPORT_INTERVAL` and `OTEL_METRIC_EXPORT_TIMEOUT` as
+positive integer millisecond values; the defaults are 60000 (60 seconds) and
+30000 (30 seconds). Invalid or non-positive values fail startup rather than
+silently selecting a surprising cadence. `crated` flushes and shuts down the
+periodic metric reader during SIGTERM handling.
+
+The broker must currently run exactly one replica because it owns in-process
+mutation locking and background expiry cleanup. A Knative Service should pin
+it with `autoscaling.knative.dev/minScale: "1"` and
+`autoscaling.knative.dev/maxScale: "1"`; use a separate web Service for
+independent read scaling. Application metrics exported by this process do not
+automatically drive Knative Pod Autoscaler (KPA) decisions—KPA remains driven
+by its configured request/concurrency behavior unless you install and
+configure a different autoscaler.
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "1"
+```
+
+### Metric reference
+
+All names below are OpenTelemetry instrument names; the Prometheus exporter
+translates them to Prometheus naming conventions (for example, counters gain
+the usual `_total` suffix). Attributes are bounded enums or normalized routes.
+No site name, token ID/name, bearer value, raw path, request ID, or error text
+is used as a metric attribute.
+
+| Instrument | Unit | Attributes / meaning |
+|---|---:|---|
+| `crate.broker.http.requests` | `{request}` | `http.request.method`, normalized `http.route`, status |
+| `crate.broker.http.request.duration` | `s` | Request latency with the same attributes |
+| `crate.broker.upload.bytes` | `By` | Tar upload bytes by normalized route |
+| `crate.broker.mutations` | `{mutation}` | Push/delete and `success`, `rejected`, or `error` |
+| `crate.broker.auth.rejections` | `{rejection}` | `missing_bearer`, `invalid_token`, or `root_required` |
+| `crate.broker.storage.operations` / `.operation.duration` | `{operation}` / `s` | Broker list/replace/delete/expiry-storage outcome and latency |
+| `crate.broker.expiry.cleanup.duration`, `.errors`, `.deleted` | `s`, `{error}`, `{site}` | Expiry cleanup work, failures, and deleted sites |
+| `crate.broker.sites` | `{site}` | Cached stored-site count; a scrape never lists storage |
+
 ### Pushing from the host CLI (development)
 
 The host `crate` CLI talks to the dockerized daemon via env vars:
@@ -206,7 +307,11 @@ This gives you TLS, vhost routing, and optional IP-allowlisting without changing
 
 ## Kubernetes
 
-Out of scope for v0, but the shape is clean: package the existing image, mount the same `/config` and `/data` volumes as `PersistentVolumeClaim`s, expose with a Gateway-API `HTTPRoute`. The Gateway controller handles TLS the same way tsdproxy does. A reference manifest will land alongside the Helm/kustomize work in [`roadmap.md`](roadmap.md).
+Package the existing image, mount the same `/config` and `/data` volumes as
+`PersistentVolumeClaim`s where local storage is used, and expose the web
+surface with a Gateway-API `HTTPRoute`. The Gateway controller handles TLS the
+same way tsdproxy does. For Knative plus central OTLP collection, see
+[Broker metrics with OTLP and Knative](#broker-metrics-with-otlp-and-knative).
 
 ## 4. Object storage (no writable volume)
 

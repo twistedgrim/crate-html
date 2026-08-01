@@ -27,6 +27,7 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/storage"
+	"github.com/Twistedgrim/crate-html/internal/telemetry"
 	"github.com/Twistedgrim/crate-html/internal/token"
 	"github.com/Twistedgrim/crate-html/internal/wire"
 )
@@ -58,18 +59,29 @@ type Server struct {
 	log        *slog.Logger
 	builtins   []builtin.Site
 	indexTmpl  *template.Template
+	metrics    telemetry.BrokerMetrics
 	mutationMu sync.Mutex
 }
 
 // New returns a Server. Pass nil for builtins to skip embedded sites and nil
 // for tokens to accept only the root config token.
 func New(cfg config.Config, store Backend, tokens *token.Store, builtins []builtin.Site, logger *slog.Logger) *Server {
+	return NewWithMetrics(cfg, store, tokens, builtins, logger, nil)
+}
+
+// NewWithMetrics returns a broker-capable Server with an explicit metrics
+// dependency. Passing nil leaves metrics disabled, which keeps embedders and
+// unit tests opt-in and prevents the public web role from creating them.
+func NewWithMetrics(cfg config.Config, store Backend, tokens *token.Store, builtins []builtin.Site, logger *slog.Logger, metrics telemetry.BrokerMetrics) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if metrics == nil {
+		metrics = telemetry.DisabledMetrics()
+	}
 	return &Server{
 		store: store, mutable: store, tokens: tokens, cfg: cfg, log: logger,
-		builtins: builtins, indexTmpl: defaultIndexTmpl,
+		builtins: builtins, indexTmpl: defaultIndexTmpl, metrics: metrics,
 	}
 }
 
@@ -221,6 +233,16 @@ func (s *Server) logBrokerRequest(route string, next http.Handler) http.Handler 
 		if recorder.status == 0 {
 			recorder.status = http.StatusOK
 		}
+		s.metrics.HTTP(r.Method, route, recorder.status, time.Since(started), body.bytes)
+		if audit.rejection == "missing_bearer" || audit.rejection == "invalid_token" || audit.rejection == "root_required" {
+			s.metrics.AuthRejection(audit.rejection)
+		}
+		if r.Method == http.MethodPut && route == "/api/sites/{name}" {
+			s.metrics.Mutation("push", mutationOutcome(recorder.status))
+		}
+		if r.Method == http.MethodDelete && route == "/api/sites/{name}" {
+			s.metrics.Mutation("delete", mutationOutcome(recorder.status))
+		}
 		attrs := []any{
 			"request_id", audit.requestID,
 			"method", r.Method,
@@ -248,6 +270,17 @@ func (s *Server) logBrokerRequest(route string, next http.Handler) http.Handler 
 			s.log.InfoContext(r.Context(), "broker request", attrs...)
 		}
 	})
+}
+
+func mutationOutcome(status int) string {
+	switch {
+	case status >= 200 && status < 300:
+		return "success"
+	case status >= 400 && status < 500:
+		return "rejected"
+	default:
+		return "error"
+	}
 }
 
 func newRequestID() string {
@@ -374,12 +407,15 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	sites, err := s.store.List()
+	s.metrics.Storage("list", storageOutcome(err), time.Since(started))
 	if err != nil {
 		s.logRequestEvent(r, slog.LevelError, "status storage query failed", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.metrics.SetSiteCount(len(sites))
 	writeJSON(w, http.StatusOK, wire.StatusResponse{
 		Version:   Version,
 		SiteCount: len(sites),
@@ -392,12 +428,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	sites, err := s.store.List()
+	s.metrics.Storage("list", storageOutcome(err), time.Since(started))
 	if err != nil {
 		s.logRequestEvent(r, slog.LevelError, "site list failed", "err", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.metrics.SetSiteCount(len(sites))
 	writeJSON(w, http.StatusOK, wire.ListSitesResponse{Sites: sites})
 }
 
@@ -448,7 +487,9 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
+	storageStarted := time.Now()
 	site, err := s.mutable.ReplaceFromTarWithExpiry(name, staged, expiry)
+	s.metrics.Storage("replace", storageOutcome(err), time.Since(storageStarted))
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) || errors.Is(err, storage.ErrSiteTooLarge) {
@@ -476,6 +517,7 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 		"bytes", site.SizeBytes,
 		"expires_at", expiresAt,
 	)
+	s.refreshMetricSiteCount()
 	writeJSON(w, http.StatusOK, wire.PutSiteResponse{
 		Site: site,
 		URL:  strings.TrimRight(s.cfg.EffectivePublicURL(), "/") + "/" + name + "/",
@@ -487,7 +529,36 @@ func (s *Server) handlePutSite(w http.ResponseWriter, r *http.Request) {
 func (s *Server) DeleteExpired(now time.Time) ([]string, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
-	return s.mutable.DeleteExpired(now)
+	started := time.Now()
+	deleted, err := s.mutable.DeleteExpired(now)
+	s.metrics.Storage("delete_expired", storageOutcome(err), time.Since(started))
+	s.metrics.Expiry(time.Since(started), len(deleted), err)
+	if err == nil {
+		s.refreshMetricSiteCount()
+	}
+	return deleted, err
+}
+
+// RefreshMetricSiteCount updates the cached site gauge from storage. It is
+// called at broker startup and after mutations, never by a metric scrape.
+func (s *Server) RefreshMetricSiteCount() {
+	s.refreshMetricSiteCount()
+}
+
+func (s *Server) refreshMetricSiteCount() {
+	started := time.Now()
+	sites, err := s.store.List()
+	s.metrics.Storage("list", storageOutcome(err), time.Since(started))
+	if err == nil {
+		s.metrics.SetSiteCount(len(sites))
+	}
+}
+
+func storageOutcome(err error) string {
+	if err != nil {
+		return "error"
+	}
+	return "success"
 }
 
 func parseExpiry(value string) (*time.Duration, error) {
@@ -609,7 +680,10 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
-	if err := s.mutable.Delete(name); err != nil {
+	storageStarted := time.Now()
+	err := s.mutable.Delete(name)
+	s.metrics.Storage("delete", storageOutcome(err), time.Since(storageStarted))
+	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			markRejection(r, "site_not_found")
 			writeError(w, http.StatusNotFound, err.Error())
@@ -620,6 +694,7 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logRequestEvent(r, slog.LevelInfo, "site deleted", "site", name)
+	s.refreshMetricSiteCount()
 	w.WriteHeader(http.StatusNoContent)
 }
 

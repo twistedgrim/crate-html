@@ -1,0 +1,47 @@
+# Isolated metrics smoke stack. Unlike the documented split example, this has
+# no fixed container names or host ports, so it is safe to run alongside a
+# manual crate-html deployment.
+services:
+  broker:
+    image: ${CRATE_METRICS_E2E_IMAGE:-crate-html:metrics-e2e}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["--role=broker"]
+    environment:
+      OTEL_METRICS_EXPORTER: prometheus
+      CRATE_METRICS_ADDR: 0.0.0.0:9464
+    depends_on:
+      prometheus:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7777/healthz"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./prometheus.metrics.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:13.1.1
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ../../examples/grafana/provisioning/datasources/prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ../../examples/grafana/provisioning/dashboards/crate-html.yml:/etc/grafana/provisioning/dashboards/crate-html.yml:ro
+      - ../../examples/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 1s
+      timeout: 3s
+      retries: 30

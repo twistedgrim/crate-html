@@ -47,6 +47,12 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
   tokens, and expiry; web serves public crate URLs from read-only shared
   storage. Separate `api_url` and `public_url` settings support independent
   ports or hostnames without requiring a shared reverse proxy.
+- **Broker OpenTelemetry metrics.** Disabled by default; `role=all` and
+  `role=broker` can export bounded-cardinality application metrics through
+  standard `OTEL_METRICS_EXPORTER=prometheus|otlp` configuration. Prometheus
+  uses a separate operational listener rather than a public crate route; an
+  optional split Docker + Prometheus overlay and Knative/central-Collector
+  OTLP guidance are in `docs/deploy.md`.
 
 ## Medium-term
 
@@ -72,10 +78,6 @@ A bare-bones Helm chart or kustomize overlay that runs `crated` behind a Gateway
 - **`crate stat <name>`** — single-site metadata (size, files, `expires_at`, `updated_at`). The wire type already carries everything; this is just a per-site CLI accessor rather than filtering `crate ls`.
 - **`crate mv old new`** — atomic rename via `os.Rename` in the sites root. Cheap; replaces the current `push` + `rm` dance for "I typo'd the name."
 - **`crate watch <dir> <name>`** — filesystem watcher that auto-pushes on change. Debounced. Useful for the "human edits HTML in an editor while an agent watches" and "agent iterates on generated HTML" loops.
-
-### Daemon / observability
-
-- **`/metrics` Prometheus endpoint** — site count, push success/fail counters, request-latency histogram. Public like `/api/status`. Gate behind `--metrics` if we want to keep the base binary lean.
 
 ### Speculative
 
