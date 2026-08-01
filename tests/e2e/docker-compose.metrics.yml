@@ -1,0 +1,28 @@
+# Isolated metrics smoke stack. Unlike the documented split example, this has
+# no fixed container names or host ports, so it is safe to run alongside a
+# manual crate-html deployment.
+services:
+  broker:
+    image: ${CRATE_METRICS_E2E_IMAGE:-crate-html:metrics-e2e}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["--role=broker"]
+    environment:
+      OTEL_METRICS_EXPORTER: prometheus
+      CRATE_METRICS_ADDR: 0.0.0.0:9464
+    depends_on:
+      prometheus:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7777/healthz"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./prometheus.metrics.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml

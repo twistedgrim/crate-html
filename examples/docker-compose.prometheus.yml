@@ -1,0 +1,24 @@
+# Optional observability overlay for docker-compose.split.yml.
+#
+# docker compose -f examples/docker-compose.split.yml \
+#   -f examples/docker-compose.prometheus.yml up -d --build
+#
+# Prometheus is published on the host for operator use. The broker's metrics
+# listener is only exposed to the internal Compose network; it has no host port.
+services:
+  broker:
+    environment:
+      OTEL_METRICS_EXPORTER: prometheus
+      CRATE_METRICS_ADDR: 0.0.0.0:9464
+    expose:
+      - "9464"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml

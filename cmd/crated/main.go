@@ -4,7 +4,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,14 +19,16 @@ import (
 	"github.com/Twistedgrim/crate-html/internal/s3store"
 	"github.com/Twistedgrim/crate-html/internal/server"
 	"github.com/Twistedgrim/crate-html/internal/storage"
+	"github.com/Twistedgrim/crate-html/internal/telemetry"
 	"github.com/Twistedgrim/crate-html/internal/token"
 	"github.com/alecthomas/kong"
 )
 
 type cli struct {
-	Config    string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
-	Role      string `help:"Runtime role: all serves public sites and the broker API; web is public/read-only; broker owns the API and cleanup." default:"all" enum:"all,web,broker" env:"CRATE_ROLE"`
-	LogFormat string `help:"Daemon log format." default:"text" enum:"text,json" env:"CRATE_LOG_FORMAT" name:"log-format"`
+	Config      string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
+	Role        string `help:"Runtime role: all serves public sites and the broker API; web is public/read-only; broker owns the API and cleanup." default:"all" enum:"all,web,broker" env:"CRATE_ROLE"`
+	LogFormat   string `help:"Daemon log format." default:"text" enum:"text,json" env:"CRATE_LOG_FORMAT" name:"log-format"`
+	MetricsAddr string `help:"Prometheus metrics listen address when OTEL_METRICS_EXPORTER=prometheus. Metrics never share the public listener." default:"127.0.0.1:9464" env:"CRATE_METRICS_ADDR" name:"metrics-addr"`
 }
 
 func main() {
@@ -93,7 +97,7 @@ func tokenPersistence(cfg config.Config, paths config.Paths, store server.Backen
 	return token.FileStore{Path: paths.TokensFile}, nil
 }
 
-func run(root cli) error {
+func run(root cli) (runErr error) {
 	var (
 		paths config.Paths
 		err   error
@@ -140,6 +144,22 @@ func run(root cli) error {
 		logger.Info("public endpoint", "url", cfg.EffectivePublicURL())
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	var metricsProvider *telemetry.Provider
+	if root.Role != "web" {
+		metricsProvider, err = telemetry.Start(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			runErr = errors.Join(runErr, metricsProvider.Shutdown(shutdownCtx))
+		}()
+		logger.Info("broker metrics configured", "exporter", metricsProvider.Mode())
+	}
+
 	store, err := openStore(cfg, paths, logger)
 	if err != nil {
 		return err
@@ -164,7 +184,8 @@ func run(root cli) error {
 	if root.Role == "web" {
 		srv = server.NewReadOnly(cfg, store, builtins, logger)
 	} else {
-		srv = server.New(cfg, store, tokens, builtins, logger)
+		srv = server.NewWithMetrics(cfg, store, tokens, builtins, logger, metricsProvider.Metrics())
+		srv.RefreshMetricSiteCount()
 	}
 	if root.Role != "broker" && cfg.IndexTemplate != "" {
 		if err := srv.UseIndexTemplateFile(cfg.IndexTemplate); err != nil {
@@ -189,28 +210,60 @@ func run(root cli) error {
 		IdleTimeout:       30 * time.Second,
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	var metricsSrv *http.Server
+	var metricsListener net.Listener
+	if root.Role != "web" && metricsProvider.Handler() != nil {
+		listener, lerr := net.Listen("tcp", root.MetricsAddr)
+		if lerr != nil {
+			return fmt.Errorf("listen for Prometheus metrics on %s: %w", root.MetricsAddr, lerr)
+		}
+		metricsListener = listener
+		metricsSrv = &http.Server{
+			Handler:           metricsProvider.Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       30 * time.Second,
+		}
+		logger.Info("Prometheus metrics listener", "listen", root.MetricsAddr)
+	}
 	if root.Role != "web" {
 		go watchExpiries(ctx, srv, logger, time.Minute)
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		errCh <- httpSrv.ListenAndServe()
 	}()
+	if metricsSrv != nil {
+		go func() {
+			errCh <- metricsSrv.Serve(metricsListener)
+		}()
+	}
+
+	shutdown := func() error {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		var shutdownErr error
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+		if metricsSrv != nil {
+			if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+				shutdownErr = errors.Join(shutdownErr, err)
+			}
+		}
+		return shutdownErr
+	}
 
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown signal received")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return httpSrv.Shutdown(shutdownCtx)
+		return shutdown()
 	case err := <-errCh:
+		shutdownErr := shutdown()
 		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+			return shutdownErr
 		}
-		return err
+		return errors.Join(err, shutdownErr)
 	}
 }
 
