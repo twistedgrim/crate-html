@@ -32,6 +32,11 @@ tasks:
     cmds:
       - lefthook run pre-commit
 
+  commits:check:
+    desc: Validate every commit in the current PR range
+    cmds:
+      - bash scripts/hooks/check-pr-commits.sh origin/main HEAD
+
   test:
     desc: Run all tests
     cmds:
