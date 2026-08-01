@@ -18,6 +18,16 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
 
 - **Named API tokens.** `crate token create/ls/revoke` backed by root-only `/api/tokens`. Tokens are `crate_<id>_<secret>`, stored as SHA-256 hashes in `tokens.yaml`, with optional expiry, `last_used_at` tracking, and instant revocation. The config-file token is now the root credential; per-client tokens mean revoking one agent doesn't re-key the rest. Also added `max_upload_bytes` (default 100 MiB) so a runaway push can't fill the disk.
 - **Docker.** Multi-stage build, alpine runtime, named volumes for `/config` and `/data`, `task docker:{build,up,down,nuke,logs,token,env,shell}`, env-var overrides for in-container binding.
+- **Tailnet exposure.** A production Docker + tsdproxy deployment recipe exposes
+  `crated` at `https://crate.<your-tailnet>.ts.net/`, with persistent
+  Tailscale state, HTTPS, and guidance for agents and humans using the same
+  published URLs.
+- **Reverse-proxy recipes.** Caddy and nginx guidance covers TLS, vhost
+  routing, and optional IP allowlisting in front of `crated`, without changing
+  the daemon.
+- **Agent-neutral crate-push skill.** `.agents/skills/crate-push` packages the
+  publish workflow for agents that use the standard `.agents` skill layout;
+  the existing Claude Code skill remains available for that integration.
 - **Go integration suite (`task smoke`).** ~30 tests under `tests/smoke/` (build tag `smoke`) covering lifecycle (status/ls/rm/push), bearer-token enforcement on each `/api/sites/*` verb, path-traversal rejection in URLs and tarballs, built-in cratesplainer serving + disk-shadowing, push variants (dir / stdin / pre-built tar / `--open`), `--config` flag, and `CRATE_TOKEN` env override. Replaces the original bash harness.
 - **Unit-test coverage** across `internal/`:
   - `storage` (existing) — ValidateName, atomic replace, traversal, symlinks, write→read round-trip.
@@ -34,31 +44,7 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
   storage. Separate `api_url` and `public_url` settings support independent
   ports or hostnames without requiring a shared reverse proxy.
 
-## Near-term
-
-### Pi coding agent skill
-
-The Claude Code skill at `.claude/skills/crate-push/SKILL.md` is the template. The Pi-side equivalent is the same shape — a manifest that wraps `crate push`. Same API, different agent.
-
-> "Pi" here means the Pi coding agent — a peer to Claude Code. There is no Raspberry Pi or embedded-hardware story.
-
 ## Medium-term
-
-### Reverse-proxy recipes
-
-Reference configs for sticking Caddy or nginx in front of `crated` (running locally or in Docker):
-
-```caddy
-crate.local {
-  reverse_proxy 127.0.0.1:7777
-}
-```
-
-No code change in `crated`. The proxy handles certs, vhosts, HTTP/2.
-
-### Tailnet exposure
-
-Run `crated` (or the Docker container) on the laptop and reach it from any tailnet device via the Mac's `100.x.y.z` address. Combined with Caddy + a real hostname, this is the "share a draft with your phone" loop.
 
 ### `crate logs <site>`
 
