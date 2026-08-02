@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.5](https://github.com/twistedgrim/crate-html/compare/v0.1.4...v0.1.5) (2026-08-02)
+
+
+### Features
+
+* add broker OpenTelemetry metrics ([#24](https://github.com/twistedgrim/crate-html/issues/24)) ([530d330](https://github.com/twistedgrim/crate-html/commit/530d330f45c0176e399e494c0d10490fb82f8f8d))
+* add structured broker logging ([#22](https://github.com/twistedgrim/crate-html/issues/22)) ([7a2a7ec](https://github.com/twistedgrim/crate-html/commit/7a2a7ec325d03da09c1f5d343215c7b6e9358794))
+
+
+### Bug Fixes
+
+* **s3:** stabilize Docker E2E publication ([#25](https://github.com/twistedgrim/crate-html/issues/25)) ([e33ec33](https://github.com/twistedgrim/crate-html/commit/e33ec3300466b32ebdcdaab2eba05d20bb45eb38))
+
 ## [0.1.4](https://github.com/twistedgrim/crate-html/compare/v0.1.3...v0.1.4) (2026-07-30)
 
 
