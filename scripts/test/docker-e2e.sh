@@ -55,6 +55,7 @@ wait_for_status() {
   local url="$3"
   local want="$4"
   local attempts="${5:-150}"
+  local label="${6:-GET $url from $service}"
   local got=""
   for ((i = 0; i < attempts; i++)); do
     got="$(http_status "$compose_name" "$service" "$url")"
@@ -63,7 +64,7 @@ wait_for_status() {
     fi
     sleep 0.1
   done
-  echo "GET $url from $service returned $got; wanted $want" >&2
+  echo "$label returned $got; wanted $want" >&2
   return 1
 }
 
@@ -73,6 +74,7 @@ wait_for_body() {
   local url="$3"
   local want="$4"
   local attempts="${5:-150}"
+  local label="${6:-GET $url from $service}"
   local body=""
   for ((i = 0; i < attempts; i++)); do
     if [[ "$compose_name" == "local" ]]; then
@@ -85,7 +87,7 @@ wait_for_body() {
     fi
     sleep 0.1
   done
-  echo "GET $url from $service did not contain: $want" >&2
+  echo "$label did not contain: $want" >&2
   return 1
 }
 
@@ -152,17 +154,16 @@ run_s3() {
       "${s3_dc[@]}" exec -T broker crate push - docker-s3 --expires never
   )"
   grep -Fq "http://web:7777/docker-s3/" <<<"$push_output"
-  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/ 200
-  "${s3_dc[@]}" exec -T web wget -qO- http://127.0.0.1:7777/docker-s3/ |
-    grep -Fq "crate-html"
-  [[ "$(http_status s3 web http://127.0.0.1:7777/docker-s3/only-v1.txt)" == "200" ]]
-  [[ "$(http_status s3 web http://127.0.0.1:7777/api/status)" == "404" ]]
-  [[ "$(http_status s3 broker http://127.0.0.1:7777/docker-s3/)" == "404" ]]
+  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/ 200 150 "S3 web publish status"
+  wait_for_body s3 web http://127.0.0.1:7777/docker-s3/ "crate-html" 150 "S3 web published content"
+  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/only-v1.txt 200 150 "S3 web published file"
+  wait_for_status s3 web http://127.0.0.1:7777/api/status 404 150 "S3 web hides broker API"
+  wait_for_status s3 broker http://127.0.0.1:7777/docker-s3/ 404 150 "S3 broker hides public sites"
 
   tar -C "$repo_root/testdata/sites/status" -cf - . |
     "${s3_dc[@]}" exec -T broker crate push - docker-s3 --expires never >/dev/null
-  wait_for_body s3 web http://127.0.0.1:7777/docker-s3/ "<h1>Status</h1>"
-  [[ "$(http_status s3 web http://127.0.0.1:7777/docker-s3/only-v1.txt)" == "404" ]]
+  wait_for_body s3 web http://127.0.0.1:7777/docker-s3/ "<h1>Status</h1>" 150 "S3 web replacement content"
+  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/only-v1.txt 404 150 "S3 web replacement removed old file"
 
   local named_token
   named_token="$("${s3_dc[@]}" exec -T broker crate token create docker-e2e 2>/dev/null)"
@@ -185,14 +186,14 @@ run_s3() {
       exit 1
     fi
   '
-  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/ 200
+  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/ 200 150 "S3 web remains readable with readonly identity"
 
   "${s3_dc[@]}" restart broker
   "${s3_dc[@]}" exec -T -e CRATE_TOKEN="$named_token" broker crate ls |
     grep -Fq "docker-s3"
 
   "${s3_dc[@]}" exec -T broker crate rm docker-s3 >/dev/null
-  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/ 404
+  wait_for_status s3 web http://127.0.0.1:7777/docker-s3/ 404 150 "S3 web hides deleted site"
 }
 
 case "$mode" in

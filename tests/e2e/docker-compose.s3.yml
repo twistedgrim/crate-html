@@ -40,6 +40,9 @@ services:
       CRATE_S3_BUCKET: crate
       CRATE_S3_ACCESS_KEY: cratebroker
       CRATE_S3_SECRET_KEY: broker-e2e-secret
+      # Keep the test focused on cross-process publication, not the production
+      # metadata-cache window.
+      CRATE_S3_META_TTL: 100ms
     tmpfs:
       - /config:uid=100,gid=101,mode=0755
       - /data:uid=100,gid=101,mode=0755
@@ -63,6 +66,7 @@ services:
       CRATE_S3_BUCKET: crate
       CRATE_S3_ACCESS_KEY: crateweb
       CRATE_S3_SECRET_KEY: web-e2e-secret
+      CRATE_S3_META_TTL: 100ms
     tmpfs:
       - /config:uid=100,gid=101,mode=0755
       - /data:uid=100,gid=101,mode=0755
