@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestApplyDefaults(t *testing.T) {
@@ -365,6 +366,7 @@ func TestApplyEnvS3(t *testing.T) {
 	t.Setenv(EnvS3SecretKey, "sk")
 	t.Setenv(EnvS3Prefix, "crate")
 	t.Setenv(EnvS3CacheBytes, "1234")
+	t.Setenv(EnvS3MetaTTL, "250ms")
 
 	var cfg Config
 	applyEnv(&cfg)
@@ -384,6 +386,9 @@ func TestApplyEnvS3(t *testing.T) {
 	if cfg.S3.CacheBytes != 1234 {
 		t.Errorf("CacheBytes = %d, want 1234", cfg.S3.CacheBytes)
 	}
+	if cfg.S3.MetaTTL != "250ms" {
+		t.Errorf("MetaTTL = %q, want 250ms", cfg.S3.MetaTTL)
+	}
 	if err := cfg.ValidateStorage(); err != nil {
 		t.Errorf("env-only config should validate, got %v", err)
 	}
@@ -396,5 +401,28 @@ func TestApplyEnvS3CacheBytesIgnoresGarbage(t *testing.T) {
 	applyEnv(&cfg)
 	if cfg.S3.CacheBytes != 99 {
 		t.Errorf("CacheBytes = %d, want the previous value 99", cfg.S3.CacheBytes)
+	}
+}
+
+func TestS3MetaTTLDuration(t *testing.T) {
+	tests := []struct {
+		value string
+		want  time.Duration
+		bad   bool
+	}{
+		{value: "", want: 0},
+		{value: "250ms", want: 250 * time.Millisecond},
+		{value: "not-a-duration", bad: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			got, err := (S3Config{MetaTTL: tt.value}).MetaTTLDuration()
+			if (err != nil) != tt.bad {
+				t.Fatalf("MetaTTLDuration() error = %v, want bad %v", err, tt.bad)
+			}
+			if got != tt.want {
+				t.Errorf("MetaTTLDuration() = %s, want %s", got, tt.want)
+			}
+		})
 	}
 }

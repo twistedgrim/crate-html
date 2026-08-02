@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/adrg/xdg"
 	"gopkg.in/yaml.v3"
@@ -57,6 +58,7 @@ const (
 	EnvS3SecretKey    = "CRATE_S3_SECRET_KEY"
 	EnvS3Prefix       = "CRATE_S3_PREFIX"
 	EnvS3CacheBytes   = "CRATE_S3_CACHE_BYTES"
+	EnvS3MetaTTL      = "CRATE_S3_META_TTL"
 )
 
 // Storage backend identifiers for Config.StorageBackend.
@@ -139,6 +141,21 @@ type S3Config struct {
 	// CacheBytes budgets the in-memory site cache. 0 selects the built-in
 	// default; a negative value disables caching entirely.
 	CacheBytes int64 `yaml:"cache_bytes"`
+	// MetaTTL bounds how long another S3 writer can be invisible to this
+	// process. Empty selects the store default.
+	MetaTTL string `yaml:"meta_ttl"`
+}
+
+// MetaTTLDuration parses the optional S3 metadata cache duration.
+func (c S3Config) MetaTTLDuration() (time.Duration, error) {
+	if c.MetaTTL == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.MetaTTL)
+	if err != nil {
+		return 0, fmt.Errorf("s3.meta_ttl: %w", err)
+	}
+	return d, nil
 }
 
 // Paths bundles the resolved on-disk locations used by both binaries.
@@ -314,6 +331,9 @@ func (c Config) ValidateStorage() error {
 		if len(missing) > 0 {
 			return fmt.Errorf("storage_backend %q requires %s", BackendS3, strings.Join(missing, ", "))
 		}
+		if _, err := c.S3.MetaTTLDuration(); err != nil {
+			return err
+		}
 		return nil
 	default:
 		return fmt.Errorf("unknown storage_backend %q (want %q or %q)", c.StorageBackend, BackendLocal, BackendS3)
@@ -366,6 +386,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			cfg.S3.CacheBytes = n
 		}
+	}
+	if v := os.Getenv(EnvS3MetaTTL); v != "" {
+		cfg.S3.MetaTTL = v
 	}
 }
 

@@ -52,6 +52,10 @@ func main() {
 // missing bucket stops the daemon at startup instead of failing the first push.
 func openStore(cfg config.Config, paths config.Paths, logger *slog.Logger) (server.Backend, error) {
 	if cfg.StorageBackend == config.BackendS3 {
+		metaTTL, err := cfg.S3.MetaTTLDuration()
+		if err != nil {
+			return nil, err
+		}
 		store, err := s3store.New(context.Background(), s3store.Config{
 			Endpoint:     cfg.S3.Endpoint,
 			Bucket:       cfg.S3.Bucket,
@@ -62,6 +66,7 @@ func openStore(cfg config.Config, paths config.Paths, logger *slog.Logger) (serv
 			UseSSL:       true,
 			MaxSiteBytes: cfg.MaxUploadBytes,
 			CacheBytes:   cfg.S3.CacheBytes,
+			MetaTTL:      metaTTL,
 		})
 		if err != nil {
 			return nil, err
