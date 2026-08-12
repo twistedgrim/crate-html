@@ -4,6 +4,9 @@
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 
+ARG VERSION=0.1.0-dev
+ARG UPDATE_REPOSITORY=Twistedgrim/crate-html
+
 # Cache the module download as its own layer.
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,8 +14,9 @@ RUN go mod download
 COPY . .
 
 # Static binaries — no glibc dependency, run anywhere.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/crated ./cmd/crated && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/crate  ./cmd/crate
+RUN LDFLAGS="-s -w -X github.com/Twistedgrim/crate-html/internal/buildinfo.Version=${VERSION} -X github.com/Twistedgrim/crate-html/internal/updater.Repository=${UPDATE_REPOSITORY}" && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="$LDFLAGS" -o /out/crated ./cmd/crated && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="$LDFLAGS" -o /out/crate  ./cmd/crate
 
 # --- runtime ----------------------------------------------------------------
 FROM alpine:3.22
@@ -32,6 +36,7 @@ ENV XDG_CONFIG_HOME=/config \
 RUN mkdir -p /config /data /state && \
     chown -R crate:crate /config /data /state
 
+# hadolint ignore=DL3066
 USER crate
 EXPOSE 7777
 VOLUME ["/config", "/data"]

@@ -48,9 +48,10 @@ jobs:
         env:
           TAG: ${{ needs.release-please.outputs.tag_name }}
           VERSION: ${{ needs.release-please.outputs.version }}
+          UPDATE_REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p dist
-          LDFLAGS="-s -w -X github.com/Twistedgrim/crate-html/internal/server.Version=${TAG}"
+          LDFLAGS="-s -w -X github.com/Twistedgrim/crate-html/internal/buildinfo.Version=${TAG} -X github.com/Twistedgrim/crate-html/internal/updater.Repository=${UPDATE_REPOSITORY}"
 
           build_one() {
             local os=$1 arch=$2 bin=$3
@@ -114,3 +115,6 @@ jobs:
           tags: |
             ghcr.io/twistedgrim/crate-html:${{ needs.release-please.outputs.tag_name }}
             ghcr.io/twistedgrim/crate-html:latest
+          build-args: |
+            VERSION=${{ needs.release-please.outputs.tag_name }}
+            UPDATE_REPOSITORY=${{ github.repository }}

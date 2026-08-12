@@ -16,6 +16,11 @@ No host-level service manager (launchd, systemd, `brew services`) is in scope. T
 
 ## Recently shipped
 
+- **One-command client updates.** `crate update` selects the exact macOS/Linux
+  release archive for the running platform, verifies it with the published
+  SHA-256 checksum, and replaces the client with rollback protection. Shared
+  build metadata now reports the release version from both `crate` and
+  `crated`; containerized daemons continue to update through their image.
 - **Named API tokens.** `crate token create/ls/revoke` backed by root-only `/api/tokens`. Tokens are `crate_<id>_<secret>`, stored as SHA-256 hashes in `tokens.yaml`, with optional expiry, `last_used_at` tracking, and instant revocation. The config-file token is now the root credential; per-client tokens mean revoking one agent doesn't re-key the rest. Also added `max_upload_bytes` (default 100 MiB) so a runaway push can't fill the disk.
 - **Docker.** Multi-stage build, alpine runtime, named volumes for `/config` and `/data`, `task docker:{build,up,down,nuke,logs,token,env,shell}`, env-var overrides for in-container binding.
 - **Tailnet exposure.** A production Docker + tsdproxy deployment recipe exposes

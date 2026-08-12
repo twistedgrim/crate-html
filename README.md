@@ -6,7 +6,7 @@ An agent (Claude Code, [Pi the coding agent](https://pi.ai/), anything that can 
 
 > "Pi" throughout this repo means the Pi coding agent, not Raspberry Pi hardware.
 
-Status: **v0.1.0-dev** — laptop-only out of the box, optional Docker for persistence, optional Tailscale exposure via tsdproxy. Caddy / nginx in front of the daemon is roadmap.
+Status: **pre-1.0** — laptop-only out of the box, optional Docker for persistence, optional Tailscale exposure via tsdproxy.
 
 ## Quickstart
 
@@ -21,6 +21,14 @@ task build              # produces ./bin/crate and ./bin/crated
 ```
 
 Default URL is `http://localhost:7777/`. The daemon binds to `127.0.0.1` only (override with `CRATE_LISTEN_ADDR`).
+
+Release archives for macOS and Linux are attached to each [GitHub Release](https://github.com/Twistedgrim/crate-html/releases). After placing the `crate` binary on your `PATH`, later client updates are one command:
+
+```bash
+crate update
+```
+
+The command selects the archive for the current OS and architecture, verifies it against the release's `checksums.txt`, and replaces the client binary with rollback protection. It does not update a Dockerized `crated`; update that through its container image.
 
 ### Docker
 
@@ -98,6 +106,8 @@ crate ls                    list deployed sites
 crate rm <name>             remove a site
 crate open <name>           open the site in your default browser
 crate status                show daemon version and site count
+crate version               show the client version (`crate --version` also works)
+crate update                update the client from the latest GitHub Release
 crate token                 print the root bearer token from the loaded config
 crate token create <name>   mint a named API token (shown once; root token required)
 crate token ls              list minted tokens (id, created, expires, last used)
@@ -132,8 +142,10 @@ Give each agent/machine its own named token: `crate token ls` shows per-client `
 ## Layout
 
 ```
-cmd/crate/          CLI (kong) — push, ls, rm, open, status, token
+cmd/crate/          CLI (kong) — push, ls, rm, open, status, token, update
 cmd/crated/         HTTP daemon
+internal/buildinfo/ shared client/daemon release version
+internal/updater/   checksum-verified client self-update
 internal/wire/      request/response types — the API contract
 internal/config/    XDG config loader, first-run token generation
 internal/token/     named API tokens — tokens.yaml store, hashed secrets
