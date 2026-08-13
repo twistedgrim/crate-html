@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/twistedgrim/crate-html/compare/v0.1.5...v0.1.6) (2026-08-13)
+
+
+### Features
+
+* **cli:** add checksum-verified self-update ([#26](https://github.com/twistedgrim/crate-html/issues/26)) ([af0c57c](https://github.com/twistedgrim/crate-html/commit/af0c57c5fa0704364c012e82c1102f88cdb22187))
+
 ## [0.1.5](https://github.com/twistedgrim/crate-html/compare/v0.1.4...v0.1.5) (2026-08-02)
 
 
