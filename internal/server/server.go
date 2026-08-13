@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Twistedgrim/crate-html/internal/buildinfo"
 	"github.com/Twistedgrim/crate-html/internal/builtin"
 	"github.com/Twistedgrim/crate-html/internal/config"
 	"github.com/Twistedgrim/crate-html/internal/storage"
@@ -40,13 +41,8 @@ var indexTmplSrc string
 // Server; the embedded one is the fallback.
 var defaultIndexTmpl = template.Must(template.New("index").Parse(indexTmplSrc))
 
-// Version is the daemon version reported by /api/status. It's a var, not a
-// const, so release builds can stamp it via ldflags:
-//
-//	go build -ldflags "-X github.com/Twistedgrim/crate-html/internal/server.Version=v0.2.0"
-//
-// The default value is what appears in dev builds and in `go install`.
-var Version = "0.1.0-dev"
+// Version is the daemon version reported by /api/status and /healthz.
+var Version = buildinfo.Current()
 
 const defaultExpiry = 24 * time.Hour
 

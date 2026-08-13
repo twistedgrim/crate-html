@@ -51,5 +51,9 @@ working on those file types; CI remains the merge authority.
 2. Release Please opens or updates a release PR with a version bump and
    changelog entries.
 3. Merge that generated release PR to create the tag and GitHub Release.
-4. The release workflow builds and attaches binaries and publishes the tagged
-   container image.
+4. The release workflow stamps the tag into both binaries, builds and attaches
+   platform archives plus `checksums.txt`, and publishes the tagged container
+   image. `crate update` consumes those archives and refuses an asset whose
+   SHA-256 digest does not match the checksum file. The source repository is
+   stamped from `github.repository`, so rehearsal and fork releases discover
+   their own assets rather than replacing themselves from upstream.

@@ -48,14 +48,15 @@ jobs:
         env:
           TAG: ${{ needs.release-please.outputs.tag_name }}
           VERSION: ${{ needs.release-please.outputs.version }}
+          UPDATE_REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p dist
-          LDFLAGS="-s -w -X github.com/Twistedgrim/crate-html/internal/server.Version=${TAG}"
+          LDFLAGS="-s -w -X github.com/Twistedgrim/crate-html/internal/buildinfo.Version=${TAG} -X github.com/Twistedgrim/crate-html/internal/updater.Repository=${UPDATE_REPOSITORY}"
 
           build_one() {
             local os=$1 arch=$2 bin=$3
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-              go build -trimpath -ldflags "$LDFLAGS" -o "dist/$bin" "./cmd/$bin"
+              go build -trimpath -buildvcs=false -ldflags "$LDFLAGS" -o "dist/$bin" "./cmd/$bin"
             local archive="${bin}_${VERSION}_${os}_${arch}.tar.gz"
             (cd dist && tar -czf "$archive" "$bin" && rm "$bin")
           }
@@ -68,6 +69,19 @@ jobs:
           done
 
           (cd dist && sha256sum crate_* crated_* > checksums.txt)
+
+          for archive in dist/*.tar.gz; do
+            expected_bin=$(basename "$archive" | cut -d_ -f1)
+            test "$(tar -tzf "$archive")" = "$expected_bin"
+          done
+
+          (cd dist && sha256sum -c checksums.txt)
+
+          verify_dir=$(mktemp -d)
+          tar -xzf "dist/crate_${VERSION}_linux_amd64.tar.gz" -C "$verify_dir"
+          test "$("$verify_dir/crate" version)" = "crate ${TAG}"
+          test "$("$verify_dir/crate" --version)" = "crate ${TAG}"
+
           ls -la dist
 
       - name: Attach binaries to the GitHub Release
@@ -114,3 +128,6 @@ jobs:
           tags: |
             ghcr.io/twistedgrim/crate-html:${{ needs.release-please.outputs.tag_name }}
             ghcr.io/twistedgrim/crate-html:latest
+          build-args: |
+            VERSION=${{ needs.release-please.outputs.tag_name }}
+            UPDATE_REPOSITORY=${{ github.repository }}

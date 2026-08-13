@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Twistedgrim/crate-html/internal/buildinfo"
 	"github.com/Twistedgrim/crate-html/internal/cliclient"
 	"github.com/Twistedgrim/crate-html/internal/config"
+	"github.com/Twistedgrim/crate-html/internal/updater"
 	"github.com/Twistedgrim/crate-html/internal/wire"
 	"github.com/alecthomas/kong"
 )
@@ -153,6 +155,41 @@ func (c *statusCmd) Run(g *globals) error {
 	return nil
 }
 
+type versionCmd struct{}
+
+func (c *versionCmd) Run() error {
+	fmt.Printf("crate %s\n", buildinfo.Display(buildinfo.Current()))
+	return nil
+}
+
+type updateCmd struct{}
+
+func (c *updateCmd) Run() error {
+	current := buildinfo.Current()
+	fmt.Printf("crate %s — checking for updates...\n", buildinfo.Display(current))
+
+	client, err := updater.New(updater.Options{})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	result, err := client.Update(ctx, current)
+	if err != nil {
+		return err
+	}
+	if !result.Updated {
+		fmt.Printf("crate: already up to date (%s)\n", buildinfo.Display(result.From))
+		return nil
+	}
+
+	fmt.Printf("crate: updated %s → %s\n", buildinfo.Display(result.From), buildinfo.Display(result.To))
+	if result.ReleaseURL != "" {
+		fmt.Println("What's new:", result.ReleaseURL)
+	}
+	return nil
+}
+
 func resolvePublicURL(ctx context.Context, g *globals) (string, error) {
 	if g.cfg.PublicURL != "" || g.cfg.APIURL == "" {
 		return g.cfg.EffectivePublicURL(), nil
@@ -245,14 +282,17 @@ func (c *tokenRevokeCmd) Run(g *globals) error {
 }
 
 type cli struct {
-	Config string `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
+	Config      string           `help:"Path to config.yaml. Overrides the XDG default." short:"c" type:"path" placeholder:"PATH"`
+	VersionFlag kong.VersionFlag `name:"version" help:"Print client version and quit."`
 
-	Push   pushCmd   `cmd:"" help:"Upload a directory, tar file, or stdin tar as a site."`
-	Ls     lsCmd     `cmd:"" help:"List deployed sites."`
-	Rm     rmCmd     `cmd:"" help:"Remove a site."`
-	Open   openCmd   `cmd:"" help:"Open a site in your browser."`
-	Status statusCmd `cmd:"" help:"Show daemon status."`
-	Token  tokenCmd  `cmd:"" help:"Print the root token, or manage named API tokens (create/ls/revoke)."`
+	Push    pushCmd    `cmd:"" help:"Upload a directory, tar file, or stdin tar as a site."`
+	Ls      lsCmd      `cmd:"" help:"List deployed sites."`
+	Rm      rmCmd      `cmd:"" help:"Remove a site."`
+	Open    openCmd    `cmd:"" help:"Open a site in your browser."`
+	Status  statusCmd  `cmd:"" help:"Show daemon status."`
+	Token   tokenCmd   `cmd:"" help:"Print the root token, or manage named API tokens (create/ls/revoke)."`
+	Update  updateCmd  `cmd:"" help:"Update the crate client to the latest GitHub release."`
+	Version versionCmd `cmd:"" help:"Print the crate client version."`
 }
 
 type globals struct {
@@ -265,27 +305,42 @@ func main() {
 		kong.Name("crate"),
 		kong.Description("Publish HTML to a local crate-html daemon."),
 		kong.UsageOnError(),
+		kong.Vars{"version": "crate " + buildinfo.Display(buildinfo.Current())},
 	)
 
-	paths, err := config.ResolvePaths()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "crate:", err)
-		os.Exit(1)
+	var g *globals
+	if commandNeedsConfig(kctx.Command()) {
+		cfg, err := loadConfig(root.Config)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "crate:", err)
+			os.Exit(1)
+		}
+		g = &globals{cfg: cfg}
 	}
-	if root.Config != "" {
-		paths.ConfigFile = root.Config
-	}
-	cfg, err := config.LoadOrInit(paths)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "crate:", err)
-		os.Exit(1)
-	}
-	g := &globals{cfg: cfg}
 
 	if err := kctx.Run(g); err != nil {
 		fmt.Fprintln(os.Stderr, "crate:", err)
 		os.Exit(1)
 	}
+}
+
+func commandNeedsConfig(command string) bool {
+	return command != "update" && command != "version"
+}
+
+func loadConfig(configFile string) (config.Config, error) {
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		return config.Config{}, err
+	}
+	if configFile != "" {
+		paths.ConfigFile = configFile
+	}
+	cfg, err := config.LoadOrInit(paths)
+	if err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
 }
 
 func openBrowser(url string) error {
