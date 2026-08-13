@@ -158,23 +158,38 @@ func TestUpdateRejectsDevelopmentBuildBeforeNetwork(t *testing.T) {
 }
 
 func TestAssetPattern(t *testing.T) {
-	pattern := regexpForTest(t, assetPattern("darwin", "arm64"))
-	for _, name := range []string{
-		"crate_0.1.5_darwin_arm64.tar.gz",
-		"crate_12.34.56_darwin_arm64.tar.gz",
-	} {
-		if !pattern.MatchString(name) {
-			t.Errorf("pattern does not match %q", name)
-		}
+	platforms := []struct {
+		goos   string
+		goarch string
+	}{
+		{goos: "darwin", goarch: "amd64"},
+		{goos: "darwin", goarch: "arm64"},
+		{goos: "linux", goarch: "amd64"},
+		{goos: "linux", goarch: "arm64"},
 	}
-	for _, name := range []string{
-		"crated_0.1.5_darwin_arm64.tar.gz",
-		"crate_0.1.5_linux_arm64.tar.gz",
-		"crate_0.1.5_darwin_arm64.zip",
-	} {
-		if pattern.MatchString(name) {
-			t.Errorf("pattern unexpectedly matches %q", name)
-		}
+
+	for _, platform := range platforms {
+		name := platform.goos + "/" + platform.goarch
+		t.Run(name, func(t *testing.T) {
+			pattern := regexpForTest(t, assetPattern(platform.goos, platform.goarch))
+			for _, version := range []string{"0.1.5", "12.34.56"} {
+				archive := fmt.Sprintf("crate_%s_%s_%s.tar.gz", version, platform.goos, platform.goarch)
+				if !pattern.MatchString(archive) {
+					t.Errorf("pattern does not match %q", archive)
+				}
+			}
+
+			for _, archive := range []string{
+				fmt.Sprintf("crated_0.1.5_%s_%s.tar.gz", platform.goos, platform.goarch),
+				fmt.Sprintf("crate_0.1.5_other_%s.tar.gz", platform.goarch),
+				fmt.Sprintf("crate_0.1.5_%s_other.tar.gz", platform.goos),
+				fmt.Sprintf("crate_0.1.5_%s_%s.zip", platform.goos, platform.goarch),
+			} {
+				if pattern.MatchString(archive) {
+					t.Errorf("pattern unexpectedly matches %q", archive)
+				}
+			}
+		})
 	}
 }
 
