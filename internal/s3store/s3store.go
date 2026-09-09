@@ -121,6 +121,26 @@ func (m siteMeta) toWire() wire.Site {
 	}
 }
 
+func s3Credentials(cfg Config) (*credentials.Credentials, error) {
+	if cfg.AccessKey != "" || cfg.SecretKey != "" {
+		return credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""), nil
+	}
+
+	creds := credentials.NewChainCredentials([]credentials.Provider{
+		&credentials.EnvAWS{},
+		&credentials.FileAWSCredentials{},
+		&credentials.IAM{},
+	})
+	value, err := creds.Get()
+	if err != nil {
+		return nil, fmt.Errorf("s3: retrieve AWS credentials: %w", err)
+	}
+	if value.AccessKeyID == "" || value.SecretAccessKey == "" {
+		return nil, errors.New("s3: no AWS credentials found (tried environment, shared credentials file, and IAM identity)")
+	}
+	return creds, nil
+}
+
 // New connects to the bucket and verifies it is reachable, so a misconfigured
 // endpoint fails at startup rather than on the first push.
 func New(ctx context.Context, cfg Config) (*Store, error) {
@@ -140,9 +160,9 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 		return nil, errors.New("s3: bucket is required")
 	}
 
-	creds := credentials.NewEnvAWS()
-	if cfg.AccessKey != "" || cfg.SecretKey != "" {
-		creds = credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, "")
+	creds, err := s3Credentials(cfg)
+	if err != nil {
+		return nil, err
 	}
 	client, err := minio.New(endpoint, &minio.Options{
 		Creds:  creds,

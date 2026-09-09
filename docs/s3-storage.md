@@ -61,10 +61,12 @@ durable config file has to be configurable from the environment alone.
 | `CRATE_S3_ENDPOINT` | `s3.endpoint` | **Required.** Bare host implies `https`; prefix `http://` for a plaintext dev server |
 | `CRATE_S3_BUCKET` | `s3.bucket` | **Required.** Must already exist |
 | `CRATE_S3_REGION` | `s3.region` | Optional for most S3-compatible servers |
-| `CRATE_S3_ACCESS_KEY` | `s3.access_key` | Empty → AWS credential chain |
-| `CRATE_S3_SECRET_KEY` | `s3.secret_key` | Empty → AWS credential chain |
+| `CRATE_S3_ACCESS_KEY` | `s3.access_key` | Omit both keys → AWS credential chain |
+| `CRATE_S3_SECRET_KEY` | `s3.secret_key` | Omit both keys → AWS credential chain |
 | `CRATE_S3_PREFIX` | `s3.prefix` | Scopes all keys, so one bucket can host several deployments |
 | `CRATE_S3_CACHE_BYTES` | `s3.cache_bytes` | In-memory site cache budget. `0` → 256 MiB default; negative disables caching |
+
+When both `CRATE_S3_ACCESS_KEY` and `CRATE_S3_SECRET_KEY` are omitted, credentials resolve in order from AWS environment variables, the shared AWS credentials file/profile, then ambient IAM identity (EKS Pod Identity, IRSA, ECS, or EC2 instance profile).
 
 Minimal stateless invocation:
 
