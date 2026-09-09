@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/twistedgrim/crate-html/compare/v0.1.6...v0.1.7) (2026-09-09)
+
+
+### Bug Fixes
+
+* **s3:** use AWS credential chain ([#28](https://github.com/twistedgrim/crate-html/issues/28)) ([1dc4f64](https://github.com/twistedgrim/crate-html/commit/1dc4f64cce2bf92a75566c0344222aca562f9c37))
+
 ## [0.1.6](https://github.com/twistedgrim/crate-html/compare/v0.1.5...v0.1.6) (2026-08-13)
 
 
