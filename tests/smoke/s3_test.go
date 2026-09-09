@@ -268,6 +268,36 @@ func getBody(t *testing.T, url string) (int, string) {
 	return resp.StatusCode, string(body)
 }
 
+// TestS3BackendUsesAWSSharedCredentialsFile proves the credential chain uses
+// standard AWS profile credentials when CRATE_S3_* keys are omitted. The
+// legacy EnvAWS-only provider signed this request anonymously.
+func TestS3BackendUsesAWSSharedCredentialsFile(t *testing.T) {
+	env := ensureS3(t)
+
+	for _, key := range []string{
+		"AWS_ACCESS_KEY_ID",
+		"AWS_ACCESS_KEY",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SECRET_KEY",
+		"AWS_SESSION_TOKEN",
+	} {
+		t.Setenv(key, "")
+	}
+	credentialsFile := filepath.Join(t.TempDir(), "credentials")
+	if err := os.WriteFile(credentialsFile, []byte("[default]\naws_access_key_id = "+env.accessKey+"\naws_secret_access_key = "+env.secretKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", credentialsFile)
+	t.Setenv("AWS_PROFILE", "default")
+
+	if _, err := s3store.New(context.Background(), s3store.Config{
+		Endpoint: "http://" + env.endpoint,
+		Bucket:   s3Bucket,
+	}); err != nil {
+		t.Fatalf("s3store.New with AWS shared credentials: %v", err)
+	}
+}
+
 // TestS3BackendLifecycle is the core end-to-end path: push, serve, replace,
 // list, and delete, all with sites living only in the bucket.
 func TestS3BackendLifecycle(t *testing.T) {
